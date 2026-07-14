@@ -46,6 +46,8 @@ quota setup-claude
 
 Then start or continue a Claude Code session. Quota Watch stores only the filtered quota snapshot under the user's local cache directory.
 
+Claude Code may omit `rate_limits` before the first model response. During that normal startup window, the bridge waits quietly or displays the last cached quota instead of reporting an error.
+
 If Claude Code already has a custom `statusLine`, `quota setup-claude` leaves it untouched and prints the command that needs to be chained into the existing setup.
 
 Use `quota setup-claude --dry-run` to inspect the change without writing it.

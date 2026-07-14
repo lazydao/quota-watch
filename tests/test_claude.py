@@ -1,13 +1,29 @@
+import io
 import json
 import os
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from quota_watch.claude import configure_statusline, ingest_statusline, read_cached_snapshot, statusline_command
+from quota_watch.cli import run_claude_ingest
+from quota_watch.models import unavailable_snapshot
 
 
 class ClaudeBridgeTests(unittest.TestCase):
+    def test_missing_rate_limits_waits_without_error(self) -> None:
+        with patch.object(sys, "stdin", io.StringIO('{"model":{"display_name":"Claude"}}')):
+            with patch("quota_watch.cli.read_cached_snapshot", return_value=unavailable_snapshot("claude", "empty")):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = run_claude_ingest()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(output.getvalue().strip(), "Claude quota waiting for first response")
+
     def test_cache_contains_only_filtered_quota_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "claude.json"

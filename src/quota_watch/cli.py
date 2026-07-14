@@ -83,7 +83,15 @@ def run_claude_ingest() -> int:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ClaudeError("Claude status-line input must be a JSON object.")
-        snapshot = ingest_statusline(payload)
+        try:
+            snapshot = ingest_statusline(payload)
+        except ClaudeError:
+            cached = read_cached_snapshot()
+            if cached.buckets:
+                print(f"{compact_status(cached)} · cached")
+            else:
+                print("Claude quota waiting for first response")
+            return 0
         print(compact_status(snapshot))
         return 0
     except (ClaudeError, json.JSONDecodeError) as error:
