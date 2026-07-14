@@ -54,6 +54,22 @@ If Claude Code already has a custom `statusLine`, `quota setup-claude` leaves it
 
 Use `quota setup-claude --dry-run` to inspect the change without writing it.
 
+#### Claude Code in WSL
+
+When the dashboard runs on Windows but Claude Code runs in WSL, connect the default distribution with:
+
+```powershell
+quota setup-claude --wsl
+```
+
+Select a non-default distribution with `--distro`, and preview all changes with `--dry-run`:
+
+```powershell
+quota setup-claude --wsl --distro Debian --dry-run
+```
+
+The setup creates a small wrapper under the WSL user's `~/.claude` directory. If a custom status line already exists, its output is preserved and the original settings file is backed up before the wrapper is enabled. WSL forwards only the status-line JSON to the Windows `quota.exe`, so both environments share the same filtered quota cache.
+
 ### Codex
 
 No additional setup is needed. Quota Watch locates the official local Codex executable, launches `codex app-server`, and calls `account/rateLimits/read` over JSONL stdio. The adapter displays every quota bucket returned by the installed Codex version.

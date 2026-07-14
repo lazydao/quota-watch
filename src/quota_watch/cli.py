@@ -20,6 +20,7 @@ from .claude import (
 from .codex import fetch_codex_snapshot
 from .models import ProviderSnapshot, utc_now_iso
 from .render import build_dashboard
+from .wsl import configure_wsl_statusline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("claude-ingest", help=argparse.SUPPRESS)
     setup = commands.add_parser("setup-claude", help="Connect Claude Code through a local status-line bridge.")
     setup.add_argument("--dry-run", action="store_true", help="Show what would be configured without writing.")
+    setup.add_argument("--wsl", action="store_true", help="Connect Claude Code in the default WSL distribution.")
+    setup.add_argument("--distro", help="WSL distribution name; requires --wsl.")
     return parser
 
 
@@ -106,8 +109,17 @@ def run_claude_ingest() -> int:
         return 0
 
 
-def run_setup_claude(console: Console, dry_run: bool) -> int:
+def run_setup_claude(
+    console: Console,
+    dry_run: bool,
+    use_wsl: bool = False,
+    distro: str | None = None,
+) -> int:
     try:
+        if use_wsl:
+            _, message, _ = configure_wsl_statusline(dry_run=dry_run, distro=distro)
+            console.print(message)
+            return 0
         changed, message, entry = configure_statusline(dry_run=dry_run)
     except ClaudeError as error:
         console.print(f"[red]{error}[/red]")
@@ -132,5 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "claude-ingest":
         return run_claude_ingest()
     if args.command == "setup-claude":
-        return run_setup_claude(console, args.dry_run)
+        if args.distro and not args.wsl:
+            parser.error("--distro requires --wsl.")
+        return run_setup_claude(console, args.dry_run, args.wsl, args.distro)
     return run_once(console, args.codex_timeout, args.json)
