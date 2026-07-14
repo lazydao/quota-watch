@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quota-watch"
+version = "0.1.0"
+description = "Terminal quota monitor for Claude Code and Codex"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Will Liu" }
+]
+keywords = ["claude", "codex", "quota", "terminal", "tui"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "rich>=13.9,<15",
+]
+
+[project.scripts]
+quota = "quota_watch.cli:main"
+quota-watch = "quota_watch.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/lazydao/quota-watch"
+Issues = "https://github.com/lazydao/quota-watch/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
