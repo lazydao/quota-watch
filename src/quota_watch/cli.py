@@ -80,9 +80,21 @@ def run_watch(console: Console, interval: float, codex_timeout: float) -> int:
             auto_refresh=False,
             transient=False,
         ) as live:
+            last_size = console.size
+            next_query_at = time.monotonic() + interval
             while True:
-                time.sleep(interval)
-                live.update(build_dashboard(collect_snapshots(codex_timeout)), refresh=True)
+                remaining = max(0.01, next_query_at - time.monotonic())
+                time.sleep(min(0.25, remaining))
+
+                current_size = console.size
+                if current_size != last_size:
+                    console.clear()
+                    live.refresh()
+                    last_size = current_size
+
+                if time.monotonic() >= next_query_at:
+                    live.update(build_dashboard(collect_snapshots(codex_timeout)), refresh=True)
+                    next_query_at = time.monotonic() + interval
     except KeyboardInterrupt:
         return 0
 

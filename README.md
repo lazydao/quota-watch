@@ -36,7 +36,7 @@ quota --json
 quota watch --interval 30
 ```
 
-Watch mode uses the terminal's alternate screen and replaces the completed dashboard in place. Press `Ctrl+C` to return to the original terminal contents.
+Watch mode uses the terminal's alternate screen and replaces the completed dashboard in place. Resizing the terminal redraws the current dashboard without querying the providers again. Press `Ctrl+C` to return to the original terminal contents.
 
 ### Connect Claude Code
 
