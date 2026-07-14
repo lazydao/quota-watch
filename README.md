@@ -36,6 +36,8 @@ quota --json
 quota watch --interval 30
 ```
 
+Watch mode uses the terminal's alternate screen and replaces the completed dashboard in place. Press `Ctrl+C` to return to the original terminal contents.
+
 ### Connect Claude Code
 
 Claude Code exposes quota percentages and reset timestamps to local status-line commands. Configure the bridge once:

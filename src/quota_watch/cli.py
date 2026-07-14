@@ -69,10 +69,17 @@ def run_watch(console: Console, interval: float, codex_timeout: float) -> int:
     if interval < 1:
         raise ValueError("--interval must be at least 1 second.")
     try:
-        with Live(console=console, refresh_per_second=4, transient=False) as live:
+        dashboard = build_dashboard(collect_snapshots(codex_timeout))
+        with Live(
+            dashboard,
+            console=console,
+            screen=True,
+            auto_refresh=False,
+            transient=False,
+        ) as live:
             while True:
-                live.update(build_dashboard(collect_snapshots(codex_timeout)), refresh=True)
                 time.sleep(interval)
+                live.update(build_dashboard(collect_snapshots(codex_timeout)), refresh=True)
     except KeyboardInterrupt:
         return 0
 
