@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing v* tag to publish; leave empty for an artifact-only build"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -12,22 +17,24 @@ permissions:
 jobs:
   windows-tray:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || github.ref }}
 
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"
 
       - name: Validate tag version
-        if: github.ref_type == 'tag'
+        if: env.RELEASE_TAG != ''
         shell: pwsh
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $tagVersion = $env:RELEASE_TAG -replace '^v', ''
           $pyproject = Get-Content pyproject.toml -Raw
-          $pythonMatch = [regex]::Match($pyproject, '(?m)^version = "([^"]+)"$')
+          $pythonMatch = [regex]::Match($pyproject, '(?m)^version[ \t]*=[ \t]*"([^"]+)"[ \t]*\r?$')
           if (-not $pythonMatch.Success) {
             throw "Unable to read the version from pyproject.toml."
           }
@@ -52,11 +59,9 @@ jobs:
         id: package
         shell: pwsh
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
-          $versionLabel = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME } else { "manual-$env:RUN_NUMBER" }
+          $versionLabel = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { "manual-$env:RUN_NUMBER" }
           $assetBaseName = "quota-watch-tray-$versionLabel-win-x64"
           $stagingDirectory = Join-Path $env:RUNNER_TEMP $assetBaseName
           New-Item -ItemType Directory -Path $stagingDirectory | Out-Null
@@ -84,11 +89,10 @@ jobs:
           retention-days: 14
 
       - name: Create GitHub release
-        if: github.ref_type == 'tag'
+        if: env.RELEASE_TAG != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
           ARCHIVE_PATH: ${{ steps.package.outputs.archive_path }}
           CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
         run: |
