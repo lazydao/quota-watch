@@ -8,6 +8,7 @@ Terminal quota monitor for Claude Code and Codex. It reads the sessions already 
 
 - One-shot terminal dashboard with `quota`
 - Auto-refreshing dashboard with `quota watch`
+- Windows notification-area app with a click-to-open quota flyout
 - Machine-readable output with `quota --json`
 - Multi-bucket Codex quota support through `rateLimitsByLimitId`
 - Claude 5-hour and 7-day quota support through its local status-line JSON
@@ -37,6 +38,45 @@ quota watch --interval 30
 ```
 
 Watch mode uses the terminal's alternate screen and replaces the completed dashboard in place. Resizing the terminal redraws the current dashboard without querying the providers again. Press `Ctrl+C` to return to the original terminal contents.
+
+### Windows notification-area app
+
+Quota Watch includes an optional Windows companion under `windows/QuotaWatch.Tray`. It keeps a small icon in the notification area instead of occupying a normal taskbar button.
+
+- Left-click the icon to toggle the quota flyout.
+- Click elsewhere, press `Esc`, or click the close button to hide the flyout.
+- Right-click the icon to refresh, open the terminal dashboard, enable launch at sign-in, or exit.
+- The last successful snapshot is shown immediately while a refresh runs in the background.
+- Quotas refresh automatically every five minutes.
+
+The tray app calls the installed `quota --json` command without opening a console window, so it reuses the same Claude cache, WSL bridge, Codex discovery, and provider authentication as the CLI. Set `QUOTA_WATCH_CLI_PATH` if the `quota` executable is not on `PATH`.
+
+Run it from source on Windows with the .NET 8 SDK:
+
+```powershell
+dotnet run --project windows\QuotaWatch.Tray
+```
+
+Create a self-contained Windows executable:
+
+```powershell
+.\windows\publish.ps1
+```
+
+The default output is `windows\artifacts\QuotaWatch.Tray-win-x64\QuotaWatch.Tray.exe`. Windows can initially place a new icon in the notification-area overflow; pin it from Windows taskbar settings if you want it to remain visible.
+
+### Releases
+
+The `Release` GitHub Actions workflow builds the Windows tray app on a Windows runner, runs its smoke tests, and packages the self-contained executable with the README and license. A manual workflow run uploads a 14-day Actions artifact without publishing a release.
+
+To publish a GitHub Release, update the matching versions in `pyproject.toml` and `windows\QuotaWatch.Tray\QuotaWatch.Tray.csproj`, then push a tag such as `v0.1.5`:
+
+```powershell
+git tag -a v0.1.5 -m "Quota Watch v0.1.5"
+git push origin v0.1.5
+```
+
+The workflow rejects a tag whose version does not match either project. Successful tag builds publish `quota-watch-tray-v0.1.5-win-x64.zip` and its SHA-256 checksum to the GitHub Release.
 
 ### Connect Claude Code
 
@@ -95,6 +135,8 @@ Protocol references: [Claude Code status line](https://code.claude.com/docs/en/s
 ```powershell
 python -m pip install -e .
 python -m unittest discover -s tests -v
+dotnet build windows\QuotaWatch.Tray\QuotaWatch.Tray.csproj --configuration Release
+dotnet run --project windows\QuotaWatch.Tray.Tests\QuotaWatch.Tray.Tests.csproj --configuration Release
 ```
 
 ## License

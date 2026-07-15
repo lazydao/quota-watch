@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-tray:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Validate tag version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $tagVersion = $env:RELEASE_TAG -replace '^v', ''
+          $pyproject = Get-Content pyproject.toml -Raw
+          $pythonMatch = [regex]::Match($pyproject, '(?m)^version = "([^"]+)"$')
+          if (-not $pythonMatch.Success) {
+            throw "Unable to read the version from pyproject.toml."
+          }
+
+          [xml]$trayProject = Get-Content windows/QuotaWatch.Tray/QuotaWatch.Tray.csproj
+          $trayVersion = [string]$trayProject.Project.PropertyGroup.Version
+          if ($tagVersion -ne $pythonMatch.Groups[1].Value -or $tagVersion -ne $trayVersion) {
+            throw "Tag $env:RELEASE_TAG does not match Python $($pythonMatch.Groups[1].Value) and tray $trayVersion."
+          }
+
+      - name: Build tray app
+        run: dotnet build windows/QuotaWatch.Tray/QuotaWatch.Tray.csproj --configuration Release
+
+      - name: Run tray smoke tests
+        run: dotnet run --project windows/QuotaWatch.Tray.Tests/QuotaWatch.Tray.Tests.csproj --configuration Release
+
+      - name: Publish self-contained executable
+        shell: pwsh
+        run: ./windows/publish.ps1 -Runtime win-x64
+
+      - name: Package release assets
+        id: package
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          $versionLabel = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME } else { "manual-$env:RUN_NUMBER" }
+          $assetBaseName = "quota-watch-tray-$versionLabel-win-x64"
+          $stagingDirectory = Join-Path $env:RUNNER_TEMP $assetBaseName
+          New-Item -ItemType Directory -Path $stagingDirectory | Out-Null
+          Copy-Item windows/artifacts/QuotaWatch.Tray-win-x64/QuotaWatch.Tray.exe $stagingDirectory
+          Copy-Item README.md, LICENSE $stagingDirectory
+
+          $archivePath = Join-Path $env:RUNNER_TEMP "$assetBaseName.zip"
+          Compress-Archive -Path "$stagingDirectory/*" -DestinationPath $archivePath
+          $checksumPath = "$archivePath.sha256"
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $archivePath -Leaf)" | Set-Content -Encoding ascii $checksumPath
+
+          "artifact_name=$assetBaseName" >> $env:GITHUB_OUTPUT
+          "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
+          "checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: |
+            ${{ steps.package.outputs.archive_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          ARCHIVE_PATH: ${{ steps.package.outputs.archive_path }}
+          CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+        run: |
+          $releaseArguments = @(
+            'release', 'create', $env:RELEASE_TAG,
+            $env:ARCHIVE_PATH, $env:CHECKSUM_PATH,
+            '--verify-tag',
+            '--title', "Quota Watch $env:RELEASE_TAG",
+            '--generate-notes'
+          )
+          if ($env:RELEASE_TAG.Contains('-')) {
+            $releaseArguments += '--prerelease'
+          }
+          gh @releaseArguments
