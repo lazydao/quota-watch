@@ -16,6 +16,7 @@ Terminal quota monitor for Claude Code and Codex. It reads the sessions already 
 - Machine-readable output with `quota --json`
 - Multi-bucket Codex quota support through `rateLimitsByLimitId`
 - Claude 5-hour and 7-day quota support through its local status-line JSON
+- Claude and Codex subscription-plan labels when their official CLIs expose them
 - No browser cookies, OAuth tokens, API keys, or session keys in the cache
 
 ## Install
@@ -91,6 +92,8 @@ quota setup-claude
 ```
 
 Then start or continue a Claude Code session. Quota Watch stores only the filtered quota snapshot under the user's local cache directory.
+
+Quota Watch reads Claude's subscription label from the official `claude auth status --json` command. On Windows it tries the local Claude install first, then the default WSL distribution. Only `subscriptionType` is retained; account and organization details are discarded.
 
 Claude Code may omit `rate_limits` before the first model response. During that normal startup window, the bridge waits quietly or displays the last cached quota instead of reporting an error.
 

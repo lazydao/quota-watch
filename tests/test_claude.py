@@ -6,9 +6,16 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from quota_watch.claude import configure_statusline, ingest_statusline, read_cached_snapshot, statusline_command
+from quota_watch.claude import (
+    configure_statusline,
+    ingest_statusline,
+    query_subscription_type,
+    read_cached_snapshot,
+    statusline_command,
+)
 from quota_watch.cli import run_claude_ingest
 from quota_watch.models import unavailable_snapshot
 
@@ -42,9 +49,60 @@ class ClaudeBridgeTests(unittest.TestCase):
             self.assertNotIn("secret-session-id", content)
             self.assertNotIn("private/project", content)
 
-            snapshot = read_cached_snapshot(destination, stale_after_seconds=10**9)
+            with patch("quota_watch.claude.query_subscription_type", return_value=None):
+                snapshot = read_cached_snapshot(destination, stale_after_seconds=10**9)
             self.assertEqual(snapshot.status, "available")
             self.assertEqual(snapshot.buckets[0].windows[0].used_percent, 12.5)
+
+    def test_read_cache_adds_only_claude_subscription_type(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "claude.json"
+            ingest_statusline(
+                {
+                    "rate_limits": {
+                        "five_hour": {"used_percentage": 12.5},
+                    },
+                },
+                destination,
+            )
+            auth_status = {
+                "loggedIn": True,
+                "subscriptionType": "pro",
+                "email": "private@example.com",
+                "orgName": "Private Org",
+            }
+            completed = CompletedProcess([], 0, json.dumps(auth_status), "")
+            with patch("quota_watch.claude.shutil.which", return_value="claude.exe"):
+                with patch("quota_watch.claude.subprocess.run", return_value=completed):
+                    snapshot = read_cached_snapshot(destination, stale_after_seconds=10**9)
+
+            self.assertEqual(snapshot.buckets[0].plan_type, "pro")
+            content = destination.read_text(encoding="utf-8")
+            self.assertIn('"plan_type": "pro"', content)
+            self.assertNotIn("private@example.com", content)
+            self.assertNotIn("Private Org", content)
+
+            ingest_statusline(
+                {"rate_limits": {"five_hour": {"used_percentage": 20}}},
+                destination,
+            )
+            preserved = read_cached_snapshot(destination, stale_after_seconds=10**9)
+            self.assertEqual(preserved.buckets[0].plan_type, "pro")
+
+    def test_subscription_type_falls_back_to_wsl_on_windows(self) -> None:
+        local = CompletedProcess([], 1, "", "not logged in")
+        wsl = CompletedProcess([], 0, json.dumps({"loggedIn": True, "subscriptionType": "max"}), "")
+
+        def find_executable(name: str) -> str | None:
+            return {"claude": "claude.exe", "wsl.exe": "wsl.exe"}.get(name)
+
+        with patch("quota_watch.claude.os.name", "nt"):
+            with patch("quota_watch.claude.shutil.which", side_effect=find_executable):
+                with patch("quota_watch.claude.subprocess.run", side_effect=[local, wsl]) as run:
+                    self.assertEqual(query_subscription_type(), "max")
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][:4], ["wsl.exe", "--exec", "bash", "-lc"])
 
     def test_setup_does_not_replace_existing_statusline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

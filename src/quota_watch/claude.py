@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -65,6 +66,68 @@ def _parse_limit(payload: Any, label: str, minutes: int) -> QuotaWindow | None:
     )
 
 
+def _normalize_subscription_type(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if 0 < len(value) <= 64 else None
+
+
+def _subscription_type(payload: Any) -> str | None:
+    if not isinstance(payload, dict) or payload.get("loggedIn") is False:
+        return None
+    return _normalize_subscription_type(payload.get("subscriptionType"))
+
+
+def _run_auth_status(command: list[str], timeout: float) -> str | None:
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        return _subscription_type(json.loads(completed.stdout))
+    except json.JSONDecodeError:
+        return None
+
+
+def query_subscription_type(timeout: float = 3.0) -> str | None:
+    executable = shutil.which("claude")
+    if executable:
+        subscription_type = _run_auth_status([executable, "auth", "status", "--json"], timeout)
+        if subscription_type:
+            return subscription_type
+
+    if os.name != "nt":
+        return None
+    wsl = shutil.which("wsl.exe")
+    if not wsl:
+        return None
+    return _run_auth_status(
+        [wsl, "--exec", "bash", "-lc", "claude auth status --json"],
+        timeout,
+    )
+
+
+def _cached_plan_type(path: Path) -> str | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        buckets = payload.get("buckets", [])
+        return _normalize_subscription_type(buckets[0].get("plan_type")) if buckets else None
+    except (AttributeError, OSError, TypeError, json.JSONDecodeError):
+        return None
+
+
 def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) -> ProviderSnapshot:
     rate_limits = payload.get("rate_limits")
     if not isinstance(rate_limits, dict):
@@ -81,13 +144,15 @@ def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) 
     if not windows:
         raise ClaudeError("Claude status-line input has no usable quota windows yet.")
 
+    destination = destination or cache_path()
+    plan_type = _cached_plan_type(destination)
     snapshot = ProviderSnapshot(
         provider="claude",
         status="available",
-        buckets=[QuotaBucket(bucket_id="claude", name="Claude", windows=windows)],
+        buckets=[QuotaBucket(bucket_id="claude", name="Claude", windows=windows, plan_type=plan_type)],
     )
     _atomic_json_write(
-        destination or cache_path(),
+        destination,
         {
             "schema_version": 1,
             "provider": snapshot.provider,
@@ -97,6 +162,7 @@ def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) 
                 {
                     "bucket_id": "claude",
                     "name": "Claude",
+                    "plan_type": plan_type,
                     "windows": [
                         {
                             "label": window.label,
@@ -120,10 +186,20 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
         captured_at = payload["captured_at"]
+        bucket_payloads = payload.get("buckets", [])
+        if bucket_payloads and not _normalize_subscription_type(bucket_payloads[0].get("plan_type")):
+            plan_type = query_subscription_type()
+            if plan_type:
+                bucket_payloads[0]["plan_type"] = plan_type
+                try:
+                    _atomic_json_write(source, payload)
+                except OSError:
+                    pass
         buckets = [
             QuotaBucket(
                 bucket_id=str(bucket["bucket_id"]),
                 name=str(bucket["name"]),
+                plan_type=_normalize_subscription_type(bucket.get("plan_type")),
                 windows=[
                     QuotaWindow(
                         label=str(window["label"]),
@@ -134,7 +210,7 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
                     for window in bucket.get("windows", [])
                 ],
             )
-            for bucket in payload.get("buckets", [])
+            for bucket in bucket_payloads
         ]
         captured = datetime.fromisoformat(captured_at)
         age = (datetime.now(timezone.utc) - captured.astimezone(timezone.utc)).total_seconds()
@@ -147,7 +223,7 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
             captured_at=captured_at,
             message=message,
         )
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+    except (AttributeError, OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         return unavailable_snapshot("claude", f"Claude cache is invalid: {error}")
 
 
