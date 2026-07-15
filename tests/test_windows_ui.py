@@ -1,7 +1,7 @@
 import struct
 import unittest
 import xml.etree.ElementTree as ElementTree
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 class WindowsUiTests(unittest.TestCase):
@@ -23,7 +23,8 @@ class WindowsUiTests(unittest.TestCase):
         application_icon = project.findtext("./PropertyGroup/ApplicationIcon")
 
         self.assertEqual(application_icon, r"Assets\QuotaWatch.ico")
-        icon_data = (project_directory / application_icon).read_bytes()
+        icon_path = project_directory.joinpath(*PureWindowsPath(application_icon).parts)
+        icon_data = icon_path.read_bytes()
         reserved, image_type, image_count = struct.unpack_from("<HHH", icon_data)
         self.assertEqual((reserved, image_type), (0, 1))
 
