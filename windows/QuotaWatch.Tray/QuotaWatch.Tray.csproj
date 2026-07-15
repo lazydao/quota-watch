@@ -8,6 +8,6 @@
     <Nullable>enable</Nullable>
     <AssemblyName>QuotaWatch.Tray</AssemblyName>
     <RootNamespace>QuotaWatch.Tray</RootNamespace>
-    <Version>0.1.4</Version>
+    <Version>0.1.5</Version>
   </PropertyGroup>
 </Project>
