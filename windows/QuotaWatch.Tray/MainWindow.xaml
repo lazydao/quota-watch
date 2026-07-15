@@ -46,9 +46,6 @@
             BorderThickness="1"
             CornerRadius="12"
             Padding="18">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="22" Direction="270" ShadowDepth="6" Opacity="0.45" />
-        </Border.Effect>
         <Grid x:Name="RootPanel" Focusable="True">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
