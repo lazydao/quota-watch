@@ -4,6 +4,10 @@
 
 Terminal quota monitor for Claude Code and Codex. It reads the sessions already authenticated by the official local CLIs and does not store provider credentials.
 
+<p align="center">
+  <img src="docs/images/quota-watch-tray.png" alt="Quota Watch Windows notification-area dashboard" width="440">
+</p>
+
 ## Features
 
 - One-shot terminal dashboard with `quota`
