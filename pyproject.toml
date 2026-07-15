@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quota-watch"
 version = "0.1.5"
-description = "Terminal quota monitor for Claude Code and Codex"
+description = "Windows tray and terminal quota monitor for Claude Code and Codex"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
   { name = "Will Liu" }
 ]
-keywords = ["claude", "codex", "quota", "terminal", "tui"]
+keywords = ["claude", "codex", "quota", "terminal", "tui", "windows", "system-tray", "wsl"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
