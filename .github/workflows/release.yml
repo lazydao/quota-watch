@@ -39,10 +39,20 @@ jobs:
             throw "Unable to read the version from pyproject.toml."
           }
 
+          $pythonPackage = Get-Content src/quota_watch/__init__.py -Raw
+          $pythonPackageMatch = [regex]::Match($pythonPackage, '(?m)^__version__[ \t]*=[ \t]*"([^"]+)"[ \t]*\r?$')
+          if (-not $pythonPackageMatch.Success) {
+            throw "Unable to read the version from src/quota_watch/__init__.py."
+          }
+
           [xml]$trayProject = Get-Content windows/QuotaWatch.Tray/QuotaWatch.Tray.csproj
           $trayVersion = [string]$trayProject.Project.PropertyGroup.Version
-          if ($tagVersion -ne $pythonMatch.Groups[1].Value -or $tagVersion -ne $trayVersion) {
-            throw "Tag $env:RELEASE_TAG does not match Python $($pythonMatch.Groups[1].Value) and tray $trayVersion."
+          if (
+            $tagVersion -ne $pythonMatch.Groups[1].Value -or
+            $tagVersion -ne $pythonPackageMatch.Groups[1].Value -or
+            $tagVersion -ne $trayVersion
+          ) {
+            throw "Tag $env:RELEASE_TAG does not match package $($pythonMatch.Groups[1].Value), runtime $($pythonPackageMatch.Groups[1].Value), and tray $trayVersion."
           }
 
       - name: Build tray app

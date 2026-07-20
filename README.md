@@ -52,7 +52,7 @@ Open a new PowerShell window after `ensurepath` updates `PATH`.
 Set the version to the GitHub Release you intend to use. Installing from a tag keeps the CLI and tray app on the same version instead of following the changing `main` branch.
 
 ```powershell
-$version = "v0.1.5"
+$version = "v0.1.6"
 pipx install "git+https://github.com/lazydao/quota-watch.git@$version"
 quota --version
 ```
@@ -97,7 +97,7 @@ quota --json
 The CLI also works without the Windows tray app. On macOS, Linux, or WSL, install pipx using your Python environment, then install the same tagged package:
 
 ```bash
-version="v0.1.5"
+version="v0.1.6"
 pipx install "git+https://github.com/lazydao/quota-watch.git@${version}"
 quota
 ```

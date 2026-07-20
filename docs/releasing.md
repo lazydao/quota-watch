@@ -7,6 +7,7 @@ Quota Watch uses matching versions for the Python CLI, Windows tray project, Git
 Start from an up-to-date, clean `main` branch. Update the same version in:
 
 - `pyproject.toml`
+- `src/quota_watch/__init__.py`
 - `windows/QuotaWatch.Tray/QuotaWatch.Tray.csproj`
 - the stable-version examples in `README.md`
 

@@ -18,6 +18,12 @@ class ClaudeError(RuntimeError):
     pass
 
 
+_RATE_LIMIT_WINDOWS = (
+    ("five_hour", "5h", 300),
+    ("seven_day", "7d", 10_080),
+)
+
+
 def cache_path() -> Path:
     override = os.environ.get("QUOTA_WATCH_CACHE_DIR")
     if override:
@@ -128,23 +134,61 @@ def _cached_plan_type(path: Path) -> str | None:
         return None
 
 
+def _cached_unexpired_windows(path: Path) -> dict[str, QuotaWindow]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        buckets = payload.get("buckets", [])
+        window_payloads = buckets[0].get("windows", []) if buckets else []
+        minutes_by_label = {label: minutes for _, label, minutes in _RATE_LIMIT_WINDOWS}
+        now = int(datetime.now(timezone.utc).timestamp())
+        windows: dict[str, QuotaWindow] = {}
+        for window_payload in window_payloads:
+            if not isinstance(window_payload, dict):
+                continue
+            label = window_payload.get("label")
+            minutes = minutes_by_label.get(label)
+            if minutes is None:
+                continue
+            window = _parse_limit(
+                {
+                    "used_percentage": window_payload.get("used_percent"),
+                    "resets_at": window_payload.get("resets_at"),
+                },
+                label,
+                minutes,
+            )
+            if window is not None and window.resets_at is not None and window.resets_at > now:
+                windows[label] = window
+        return windows
+    except (AttributeError, OSError, TypeError, json.JSONDecodeError):
+        return {}
+
+
 def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) -> ProviderSnapshot:
     rate_limits = payload.get("rate_limits")
     if not isinstance(rate_limits, dict):
         raise ClaudeError("Claude status-line input does not contain rate_limits.")
 
-    windows = [
+    incoming_windows = [
         window
+        for key, label, minutes in _RATE_LIMIT_WINDOWS
         for window in (
-            _parse_limit(rate_limits.get("five_hour"), "5h", 300),
-            _parse_limit(rate_limits.get("seven_day"), "7d", 10_080),
+            _parse_limit(rate_limits.get(key), label, minutes),
         )
         if window is not None
     ]
-    if not windows:
+    if not incoming_windows:
         raise ClaudeError("Claude status-line input has no usable quota windows yet.")
 
     destination = destination or cache_path()
+    windows_by_label = {window.label: window for window in incoming_windows}
+    for label, window in _cached_unexpired_windows(destination).items():
+        windows_by_label.setdefault(label, window)
+    windows = [
+        windows_by_label[label]
+        for _, label, _ in _RATE_LIMIT_WINDOWS
+        if label in windows_by_label
+    ]
     plan_type = _cached_plan_type(destination)
     snapshot = ProviderSnapshot(
         provider="claude",

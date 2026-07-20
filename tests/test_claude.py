@@ -54,6 +54,61 @@ class ClaudeBridgeTests(unittest.TestCase):
             self.assertEqual(snapshot.status, "available")
             self.assertEqual(snapshot.buckets[0].windows[0].used_percent, 12.5)
 
+    def test_partial_rate_limits_preserve_unexpired_cached_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "claude.json"
+            ingest_statusline(
+                {
+                    "rate_limits": {
+                        "five_hour": {"used_percentage": 100, "resets_at": 2_000_000_000},
+                        "seven_day": {"used_percentage": 24, "resets_at": 2_000_100_000},
+                    },
+                },
+                destination,
+            )
+
+            ingest_statusline(
+                {
+                    "rate_limits": {
+                        "seven_day": {"used_percentage": 25, "resets_at": 2_000_100_000},
+                    },
+                },
+                destination,
+            )
+
+            with patch("quota_watch.claude.query_subscription_type", return_value=None):
+                snapshot = read_cached_snapshot(destination, stale_after_seconds=10**9)
+            windows = snapshot.buckets[0].windows
+            self.assertEqual([window.label for window in windows], ["5h", "7d"])
+            self.assertEqual(windows[0].used_percent, 100)
+            self.assertEqual(windows[1].used_percent, 25)
+
+    def test_partial_rate_limits_drop_expired_cached_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "claude.json"
+            ingest_statusline(
+                {
+                    "rate_limits": {
+                        "five_hour": {"used_percentage": 100, "resets_at": 1},
+                        "seven_day": {"used_percentage": 24, "resets_at": 2_000_100_000},
+                    },
+                },
+                destination,
+            )
+
+            ingest_statusline(
+                {
+                    "rate_limits": {
+                        "seven_day": {"used_percentage": 25, "resets_at": 2_000_100_000},
+                    },
+                },
+                destination,
+            )
+
+            with patch("quota_watch.claude.query_subscription_type", return_value=None):
+                snapshot = read_cached_snapshot(destination, stale_after_seconds=10**9)
+            self.assertEqual([window.label for window in snapshot.buckets[0].windows], ["7d"])
+
     def test_read_cache_adds_only_claude_subscription_type(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "claude.json"
