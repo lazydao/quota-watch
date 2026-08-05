@@ -30,8 +30,8 @@ Commit the version change, push `main`, and then create an annotated tag. For ex
 
 ```powershell
 git push origin main
-git tag -a v0.1.6 -m "Quota Watch v0.1.6"
-git push origin v0.1.6
+git tag -a v0.1.7 -m "Quota Watch v0.1.7"
+git push origin v0.1.7
 ```
 
 The tag-driven Release workflow rejects versions that do not match both project files.

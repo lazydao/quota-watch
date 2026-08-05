@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import shutil
@@ -55,18 +56,35 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
             temporary.unlink()
 
 
+def _normalize_used_percentage(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        used = float(value)
+    elif isinstance(value, str):
+        try:
+            used = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if not math.isfinite(used) or used < 0:
+        return None
+    return min(used, 100.0)
+
+
 def _parse_limit(payload: Any, label: str, minutes: int) -> QuotaWindow | None:
     if not isinstance(payload, dict):
         return None
-    used = payload.get("used_percentage")
-    if not isinstance(used, (int, float)) or not 0 <= float(used) <= 100:
+    used = _normalize_used_percentage(payload.get("used_percentage"))
+    if used is None:
         return None
     resets_at = payload.get("resets_at")
     if not isinstance(resets_at, int):
         resets_at = None
     return QuotaWindow(
         label=label,
-        used_percent=float(used),
+        used_percent=used,
         window_minutes=minutes,
         resets_at=resets_at,
     )

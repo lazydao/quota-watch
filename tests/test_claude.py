@@ -109,6 +109,40 @@ class ClaudeBridgeTests(unittest.TestCase):
                 snapshot = read_cached_snapshot(destination, stale_after_seconds=10**9)
             self.assertEqual([window.label for window in snapshot.buckets[0].windows], ["7d"])
 
+    def test_exhausted_percentage_replaces_cached_value_during_extra_usage(self) -> None:
+        for exhausted_value in (100.5, "100"):
+            with self.subTest(exhausted_value=exhausted_value):
+                with tempfile.TemporaryDirectory() as directory:
+                    destination = Path(directory) / "claude.json"
+                    ingest_statusline(
+                        {
+                            "rate_limits": {
+                                "five_hour": {"used_percentage": 80, "resets_at": 2_000_000_000},
+                                "seven_day": {"used_percentage": 12, "resets_at": 2_000_100_000},
+                            },
+                        },
+                        destination,
+                    )
+
+                    ingest_statusline(
+                        {
+                            "rate_limits": {
+                                "five_hour": {
+                                    "used_percentage": exhausted_value,
+                                    "resets_at": 2_000_000_000,
+                                },
+                                "seven_day": {"used_percentage": 13, "resets_at": 2_000_100_000},
+                            },
+                        },
+                        destination,
+                    )
+
+                    with patch("quota_watch.claude.query_subscription_type", return_value=None):
+                        snapshot = read_cached_snapshot(destination, stale_after_seconds=10**9)
+                    windows = snapshot.buckets[0].windows
+                    self.assertEqual(windows[0].used_percent, 100)
+                    self.assertEqual(windows[1].used_percent, 13)
+
     def test_read_cache_adds_only_claude_subscription_type(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "claude.json"
