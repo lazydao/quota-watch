@@ -74,12 +74,13 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
     public void ApplySnapshot(QuotaSnapshot snapshot, bool fromCache = false)
     {
         Providers.Clear();
+        var generatedAt = snapshot.GeneratedAt == default ? DateTimeOffset.UtcNow : snapshot.GeneratedAt;
         foreach (var provider in snapshot.Providers)
         {
-            Providers.Add(ProviderViewModel.FromSnapshot(provider));
+            Providers.Add(ProviderViewModel.FromSnapshot(provider, generatedAt));
         }
 
-        var localTime = snapshot.GeneratedAt.ToLocalTime();
+        var localTime = generatedAt.ToLocalTime();
         LastUpdatedText = $"Updated {localTime:yyyy-MM-dd HH:mm:ss}";
         StatusText = fromCache ? "Showing the last saved snapshot" : "Updates automatically every 5 minutes";
         RecalculateSummary(snapshot);
@@ -158,7 +159,7 @@ public sealed class ProviderViewModel
 
     public ObservableCollection<BucketViewModel> Buckets { get; init; } = [];
 
-    public static ProviderViewModel FromSnapshot(ProviderSnapshot provider)
+    public static ProviderViewModel FromSnapshot(ProviderSnapshot provider, DateTimeOffset generatedAt)
     {
         var status = provider.Status.ToLowerInvariant();
         var viewModel = new ProviderViewModel
@@ -188,7 +189,7 @@ public sealed class ProviderViewModel
 
         foreach (var bucket in provider.Buckets)
         {
-            viewModel.Buckets.Add(BucketViewModel.FromSnapshot(bucket));
+            viewModel.Buckets.Add(BucketViewModel.FromSnapshot(bucket, generatedAt));
         }
 
         return viewModel;
@@ -203,7 +204,7 @@ public sealed class BucketViewModel
 
     public ObservableCollection<QuotaWindowViewModel> Windows { get; init; } = [];
 
-    public static BucketViewModel FromSnapshot(QuotaBucket bucket)
+    public static BucketViewModel FromSnapshot(QuotaBucket bucket, DateTimeOffset generatedAt)
     {
         var viewModel = new BucketViewModel
         {
@@ -213,7 +214,7 @@ public sealed class BucketViewModel
 
         foreach (var window in bucket.Windows)
         {
-            viewModel.Windows.Add(QuotaWindowViewModel.FromSnapshot(window));
+            viewModel.Windows.Add(QuotaWindowViewModel.FromSnapshot(window, generatedAt));
         }
 
         return viewModel;
@@ -230,11 +231,18 @@ public sealed class QuotaWindowViewModel
 
     public required string ResetText { get; init; }
 
+    public required double ElapsedPercent { get; init; }
+
+    public required string TimeText { get; init; }
+
+    public required bool HasElapsedTime { get; init; }
+
     public required MediaBrush ProgressBrush { get; init; }
 
-    public static QuotaWindowViewModel FromSnapshot(QuotaWindow window)
+    public static QuotaWindowViewModel FromSnapshot(QuotaWindow window, DateTimeOffset generatedAt)
     {
         var used = Math.Clamp(window.UsedPercent, 0, 100);
+        var elapsed = CalculateElapsedPercent(window, generatedAt);
         var resetText = window.ResetsAt is long resetTimestamp
             ? $"Resets {DateTimeOffset.FromUnixTimeSeconds(resetTimestamp).ToLocalTime():MM-dd HH:mm}"
             : "Reset time unavailable";
@@ -245,6 +253,9 @@ public sealed class QuotaWindowViewModel
             UsedPercent = used,
             UsedText = $"{used:0.0}%",
             ResetText = resetText,
+            ElapsedPercent = elapsed ?? 0,
+            TimeText = elapsed is double elapsedValue ? $"Time {elapsedValue:0.0}%" : "Time —",
+            HasElapsedTime = elapsed.HasValue,
             ProgressBrush = used switch
             {
                 >= 90 => MediaBrushes.IndianRed,
@@ -252,5 +263,29 @@ public sealed class QuotaWindowViewModel
                 _ => MediaBrushes.LightGreen,
             },
         };
+    }
+
+    private static double? CalculateElapsedPercent(QuotaWindow window, DateTimeOffset generatedAt)
+    {
+        if (window.ResetsAt is not long resetTimestamp ||
+            window.WindowMinutes is not int windowMinutes ||
+            windowMinutes <= 0)
+        {
+            return null;
+        }
+
+        DateTimeOffset resetAt;
+        try
+        {
+            resetAt = DateTimeOffset.FromUnixTimeSeconds(resetTimestamp);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+
+        var remainingMinutes = (resetAt - generatedAt).TotalMinutes;
+        var elapsedPercent = (windowMinutes - remainingMinutes) / windowMinutes * 100;
+        return Math.Clamp(elapsedPercent, 0, 100);
     }
 }

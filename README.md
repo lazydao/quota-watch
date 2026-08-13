@@ -13,6 +13,7 @@ Windows notification-area and terminal quota monitor for Claude Code and Codex. 
 ## Features
 
 - Windows notification-area app with a click-to-open quota flyout
+- Elapsed-time percentages and timeline markers for at-a-glance quota pacing
 - One-shot terminal dashboard with `quota`
 - Auto-refreshing terminal dashboard with `quota watch`
 - Machine-readable output with `quota --json`
@@ -52,7 +53,7 @@ Open a new PowerShell window after `ensurepath` updates `PATH`.
 Set the version to the GitHub Release you intend to use. Installing from a tag keeps the CLI and tray app on the same version instead of following the changing `main` branch.
 
 ```powershell
-$version = "v0.1.7"
+$version = "v0.1.8"
 pipx install "git+https://github.com/lazydao/quota-watch.git@$version"
 quota --version
 ```
@@ -97,7 +98,7 @@ quota --json
 The CLI also works without the Windows tray app. On macOS, Linux, or WSL, install pipx using your Python environment, then install the same tagged package:
 
 ```bash
-version="v0.1.7"
+version="v0.1.8"
 pipx install "git+https://github.com/lazydao/quota-watch.git@${version}"
 quota
 ```

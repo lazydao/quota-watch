@@ -17,6 +17,32 @@ class WindowsUiTests(unittest.TestCase):
         self.assertEqual(outer_border.get("CornerRadius"), "12")
         self.assertIsNone(outer_border.find(f"{{{namespace}}}Border.Effect"))
 
+    def test_popup_compares_usage_with_elapsed_time(self) -> None:
+        xaml_path = Path(__file__).parents[1] / "windows" / "QuotaWatch.Tray" / "MainWindow.xaml"
+        window = ElementTree.parse(xaml_path).getroot()
+        namespace = "http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+
+        progress_bars = window.findall(f".//{{{namespace}}}ProgressBar")
+        elapsed_marker = next(
+            bar for bar in progress_bars if bar.get("Value") == "{Binding ElapsedPercent}"
+        )
+        time_labels = [
+            label
+            for label in window.findall(f".//{{{namespace}}}TextBlock")
+            if label.get("Text") == "{Binding TimeText}"
+        ]
+
+        self.assertEqual(
+            elapsed_marker.get("Style"),
+            "{StaticResource TimeMarkerProgressBarStyle}",
+        )
+        self.assertEqual(
+            elapsed_marker.get("Visibility"),
+            "{Binding HasElapsedTime, Converter={StaticResource BooleanToVisibilityConverter}}",
+        )
+        self.assertEqual(len(time_labels), 1)
+        self.assertEqual(time_labels[0].get("Foreground"), "{StaticResource TimeAccentBrush}")
+
     def test_tray_executable_has_a_multi_size_application_icon(self) -> None:
         project_directory = Path(__file__).parents[1] / "windows" / "QuotaWatch.Tray"
         project = ElementTree.parse(project_directory / "QuotaWatch.Tray.csproj").getroot()

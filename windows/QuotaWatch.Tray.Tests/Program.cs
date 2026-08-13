@@ -41,6 +41,10 @@ dashboard.ApplySnapshot(snapshot);
 Assert(dashboard.Providers[0].Name == "Claude", "provider display name");
 Assert(dashboard.Severity == QuotaSeverity.Warning, "stale provider severity");
 Assert(dashboard.TrayTooltip.Contains("Claude 72.5%", StringComparison.Ordinal), "tray tooltip");
+var window = dashboard.Providers[0].Buckets[0].Windows[0];
+Assert(window.HasElapsedTime, "elapsed time availability");
+Assert(Math.Abs(window.ElapsedPercent - 43.48) < 0.01, "elapsed time percentage");
+Assert(window.TimeText == "Time 43.5%", "elapsed time label");
 
 var unsupportedSchemaRejected = false;
 try

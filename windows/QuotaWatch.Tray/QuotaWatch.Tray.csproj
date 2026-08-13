@@ -9,6 +9,6 @@
     <AssemblyName>QuotaWatch.Tray</AssemblyName>
     <RootNamespace>QuotaWatch.Tray</RootNamespace>
     <ApplicationIcon>Assets\QuotaWatch.ico</ApplicationIcon>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
   </PropertyGroup>
 </Project>
