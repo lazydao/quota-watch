@@ -96,14 +96,19 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
     private void RecalculateSummary(QuotaSnapshot snapshot)
     {
         var providers = snapshot.Providers;
-        var allWindows = providers.SelectMany(provider => provider.Buckets).SelectMany(bucket => bucket.Windows).ToList();
-        var maxUsed = allWindows.Count == 0 ? 0 : allWindows.Max(window => window.UsedPercent);
+        var windowSeverities = Providers
+            .SelectMany(provider => provider.Buckets)
+            .SelectMany(bucket => bucket.Windows)
+            .Select(window => window.Severity)
+            .ToList();
         var hasUnavailable = providers.Any(provider => provider.Status.Equals("unavailable", StringComparison.OrdinalIgnoreCase));
         var hasStale = providers.Any(provider => provider.Status.Equals("stale", StringComparison.OrdinalIgnoreCase));
+        var hasCriticalWindow = windowSeverities.Contains(QuotaSeverity.Critical);
+        var hasWarningWindow = windowSeverities.Contains(QuotaSeverity.Warning);
 
-        Severity = hasUnavailable || maxUsed >= 90
+        Severity = hasUnavailable || hasCriticalWindow
             ? QuotaSeverity.Critical
-            : hasStale || maxUsed >= 70
+            : hasStale || hasWarningWindow
                 ? QuotaSeverity.Warning
                 : QuotaSeverity.Normal;
 
@@ -237,32 +242,81 @@ public sealed class QuotaWindowViewModel
 
     public required bool HasElapsedTime { get; init; }
 
+    public required QuotaSeverity Severity { get; init; }
+
     public required MediaBrush ProgressBrush { get; init; }
 
     public static QuotaWindowViewModel FromSnapshot(QuotaWindow window, DateTimeOffset generatedAt)
     {
-        var used = Math.Clamp(window.UsedPercent, 0, 100);
+        var used = NormalizeUsedPercent(window.UsedPercent);
         var elapsed = CalculateElapsedPercent(window, generatedAt);
-        var resetText = window.ResetsAt is long resetTimestamp
-            ? $"Resets {DateTimeOffset.FromUnixTimeSeconds(resetTimestamp).ToLocalTime():MM-dd HH:mm}"
-            : "Reset time unavailable";
+        var severity = CalculateSeverity(used, elapsed);
 
         return new QuotaWindowViewModel
         {
             Label = window.Label,
             UsedPercent = used,
             UsedText = $"{used:0.0}%",
-            ResetText = resetText,
+            ResetText = FormatResetText(window.ResetsAt),
             ElapsedPercent = elapsed ?? 0,
             TimeText = elapsed is double elapsedValue ? $"Time {elapsedValue:0.0}%" : "Time —",
             HasElapsedTime = elapsed.HasValue,
-            ProgressBrush = used switch
+            Severity = severity,
+            ProgressBrush = severity switch
             {
-                >= 90 => MediaBrushes.IndianRed,
-                >= 70 => MediaBrushes.Goldenrod,
+                QuotaSeverity.Critical => MediaBrushes.IndianRed,
+                QuotaSeverity.Warning => MediaBrushes.Goldenrod,
                 _ => MediaBrushes.LightGreen,
             },
         };
+    }
+
+    private static double NormalizeUsedPercent(double usedPercent)
+    {
+        return double.IsFinite(usedPercent) ? Math.Clamp(usedPercent, 0, 100) : 0;
+    }
+
+    private static QuotaSeverity CalculateSeverity(double usedPercent, double? elapsedPercent)
+    {
+        if (usedPercent >= 100)
+        {
+            return QuotaSeverity.Critical;
+        }
+
+        if (elapsedPercent is double elapsed)
+        {
+            var paceDifference = usedPercent - elapsed;
+            if (paceDifference >= 15)
+            {
+                return QuotaSeverity.Critical;
+            }
+
+            return paceDifference > 2 ? QuotaSeverity.Warning : QuotaSeverity.Normal;
+        }
+
+        return usedPercent switch
+        {
+            >= 90 => QuotaSeverity.Critical,
+            >= 70 => QuotaSeverity.Warning,
+            _ => QuotaSeverity.Normal,
+        };
+    }
+
+    private static string FormatResetText(long? resetTimestamp)
+    {
+        if (resetTimestamp is not long timestamp)
+        {
+            return "Reset time unavailable";
+        }
+
+        try
+        {
+            return $"Resets {DateTimeOffset.FromUnixTimeSeconds(timestamp).ToLocalTime():MM-dd HH:mm}";
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return "Reset time unavailable";
+        }
     }
 
     private static double? CalculateElapsedPercent(QuotaWindow window, DateTimeOffset generatedAt)
@@ -286,6 +340,11 @@ public sealed class QuotaWindowViewModel
 
         var remainingMinutes = (resetAt - generatedAt).TotalMinutes;
         var elapsedPercent = (windowMinutes - remainingMinutes) / windowMinutes * 100;
+        if (!double.IsFinite(elapsedPercent))
+        {
+            return null;
+        }
+
         return Math.Clamp(elapsedPercent, 0, 100);
     }
 }

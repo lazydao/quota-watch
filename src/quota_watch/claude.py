@@ -24,6 +24,68 @@ _RATE_LIMIT_WINDOWS = (
     ("seven_day", "7d", 10_080),
 )
 
+ACTIVE_REFRESH_INTERVAL_SECONDS = 600
+
+_WSL_USAGE_HELPER = r"""
+import json
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+endpoint = "https://api.anthropic.com/api/oauth/usage"
+credentials_path = Path.home() / ".claude" / ".credentials.json"
+
+def fail(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    credentials = json.loads(credentials_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    fail("Claude OAuth credentials are unavailable in WSL.")
+
+oauth = credentials.get("claudeAiOauth")
+if not isinstance(oauth, dict):
+    fail("Claude OAuth credentials are unavailable in WSL.")
+
+access_token = oauth.get("accessToken")
+if not isinstance(access_token, str) or not access_token:
+    fail("Claude OAuth access token is unavailable in WSL.")
+
+request = urllib.request.Request(
+    endpoint,
+    headers={
+        "Accept": "application/json",
+        "Authorization": "Bearer " + access_token,
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "claude-cli/2.1.0 (external, cli)",
+    },
+)
+
+try:
+    with urllib.request.urlopen(request, timeout=float(sys.argv[1])) as response:
+        payload = json.load(response)
+except urllib.error.HTTPError as error:
+    fail(f"Claude usage request failed with HTTP status {error.code}.")
+except (OSError, ValueError, urllib.error.URLError):
+    fail("Claude usage request failed in WSL.")
+
+if not isinstance(payload, dict):
+    fail("Claude usage response is invalid.")
+
+filtered = {"subscription_type": oauth.get("subscriptionType")}
+for key in ("five_hour", "seven_day"):
+    window = payload.get(key)
+    if isinstance(window, dict):
+        filtered[key] = {
+            "utilization": window.get("utilization"),
+            "resets_at": window.get("resets_at"),
+        }
+
+print(json.dumps(filtered, separators=(",", ":")))
+"""
+
 
 def cache_path() -> Path:
     override = os.environ.get("QUOTA_WATCH_CACHE_DIR")
@@ -34,6 +96,10 @@ def cache_path() -> Path:
     else:
         root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "quota-watch"
     return root / "claude.json"
+
+
+def oauth_refresh_state_path() -> Path:
+    return cache_path().with_name("claude-oauth-refresh.json")
 
 
 def claude_settings_path() -> Path:
@@ -90,6 +156,36 @@ def _parse_limit(payload: Any, label: str, minutes: int) -> QuotaWindow | None:
     )
 
 
+def _parse_reset_timestamp(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _parse_oauth_limit(payload: Any, label: str, minutes: int) -> QuotaWindow | None:
+    if not isinstance(payload, dict):
+        return None
+    used = _normalize_used_percentage(payload.get("utilization"))
+    if used is None:
+        return None
+    return QuotaWindow(
+        label=label,
+        used_percent=used,
+        window_minutes=minutes,
+        resets_at=_parse_reset_timestamp(payload.get("resets_at")),
+    )
+
+
 def _normalize_subscription_type(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -143,6 +239,67 @@ def query_subscription_type(timeout: float = 3.0) -> str | None:
     )
 
 
+def query_oauth_usage_wsl(timeout: float = 8.0, distro: str | None = None) -> dict[str, Any]:
+    if os.name != "nt":
+        raise ClaudeError("Claude active refresh through WSL is available only on Windows.")
+    executable = shutil.which("wsl.exe")
+    if not executable:
+        raise ClaudeError("wsl.exe was not found.")
+
+    selected_distro = distro or os.environ.get("QUOTA_WATCH_CLAUDE_WSL_DISTRO")
+    command = [executable]
+    if selected_distro:
+        command.extend(["--distribution", selected_distro])
+    command.extend(["--exec", "python3", "-c", _WSL_USAGE_HELPER, str(timeout)])
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout + 3,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ClaudeError(f"Could not query Claude usage through WSL: {error}") from error
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()[-1] if completed.stderr.strip() else "WSL helper failed."
+        raise ClaudeError(detail[:240])
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ClaudeError("Claude usage helper returned invalid JSON.") from error
+    if not isinstance(payload, dict):
+        raise ClaudeError("Claude usage helper returned an invalid payload.")
+    return payload
+
+
+def parse_oauth_usage(payload: dict[str, Any]) -> ProviderSnapshot:
+    windows = [
+        window
+        for key, label, minutes in _RATE_LIMIT_WINDOWS
+        for window in (_parse_oauth_limit(payload.get(key), label, minutes),)
+        if window is not None
+    ]
+    if not windows:
+        raise ClaudeError("Claude usage response has no usable quota windows.")
+    return ProviderSnapshot(
+        provider="claude",
+        status="available",
+        buckets=[
+            QuotaBucket(
+                bucket_id="claude",
+                name="Claude",
+                windows=windows,
+                plan_type=_normalize_subscription_type(payload.get("subscription_type")),
+            )
+        ],
+    )
+
+
 def _cached_plan_type(path: Path) -> str | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -182,6 +339,35 @@ def _cached_unexpired_windows(path: Path) -> dict[str, QuotaWindow]:
         return {}
 
 
+def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> None:
+    bucket = snapshot.buckets[0]
+    _atomic_json_write(
+        destination,
+        {
+            "schema_version": 1,
+            "provider": snapshot.provider,
+            "status": snapshot.status,
+            "captured_at": snapshot.captured_at,
+            "buckets": [
+                {
+                    "bucket_id": bucket.bucket_id,
+                    "name": bucket.name,
+                    "plan_type": bucket.plan_type,
+                    "windows": [
+                        {
+                            "label": window.label,
+                            "used_percent": window.used_percent,
+                            "window_minutes": window.window_minutes,
+                            "resets_at": window.resets_at,
+                        }
+                        for window in bucket.windows
+                    ],
+                }
+            ],
+        },
+    )
+
+
 def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) -> ProviderSnapshot:
     rate_limits = payload.get("rate_limits")
     if not isinstance(rate_limits, dict):
@@ -213,31 +399,7 @@ def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) 
         status="available",
         buckets=[QuotaBucket(bucket_id="claude", name="Claude", windows=windows, plan_type=plan_type)],
     )
-    _atomic_json_write(
-        destination,
-        {
-            "schema_version": 1,
-            "provider": snapshot.provider,
-            "status": snapshot.status,
-            "captured_at": snapshot.captured_at,
-            "buckets": [
-                {
-                    "bucket_id": "claude",
-                    "name": "Claude",
-                    "plan_type": plan_type,
-                    "windows": [
-                        {
-                            "label": window.label,
-                            "used_percent": window.used_percent,
-                            "window_minutes": window.window_minutes,
-                            "resets_at": window.resets_at,
-                        }
-                        for window in windows
-                    ],
-                }
-            ],
-        },
-    )
+    _write_snapshot(destination, snapshot)
     return snapshot
 
 
@@ -257,6 +419,7 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
                     _atomic_json_write(source, payload)
                 except OSError:
                     pass
+        now_timestamp = int(datetime.now(timezone.utc).timestamp())
         buckets = [
             QuotaBucket(
                 bucket_id=str(bucket["bucket_id"]),
@@ -270,6 +433,10 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
                         resets_at=window.get("resets_at"),
                     )
                     for window in bucket.get("windows", [])
+                    if not (
+                        isinstance(window.get("resets_at"), int)
+                        and window["resets_at"] <= now_timestamp
+                    )
                 ],
             )
             for bucket in bucket_payloads
@@ -287,6 +454,50 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
         )
     except (AttributeError, OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         return unavailable_snapshot("claude", f"Claude cache is invalid: {error}")
+
+
+def _active_refresh_due(path: Path, interval_seconds: int, now: datetime) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        last_attempt = datetime.fromisoformat(str(payload["last_attempt_at"]))
+        if last_attempt.tzinfo is None:
+            last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+        age = (now - last_attempt.astimezone(timezone.utc)).total_seconds()
+        return age >= interval_seconds
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return True
+
+
+def _has_quota_windows(snapshot: ProviderSnapshot) -> bool:
+    return any(bucket.windows for bucket in snapshot.buckets)
+
+
+def fetch_claude_snapshot(
+    timeout: float = 8.0,
+    destination: Path | None = None,
+    refresh_state: Path | None = None,
+    refresh_interval_seconds: int = ACTIVE_REFRESH_INTERVAL_SECONDS,
+) -> ProviderSnapshot:
+    destination = destination or cache_path()
+    refresh_state = refresh_state or oauth_refresh_state_path()
+    cached = read_cached_snapshot(destination)
+    now = datetime.now(timezone.utc)
+    if not _active_refresh_due(refresh_state, refresh_interval_seconds, now):
+        return cached
+
+    try:
+        _atomic_json_write(refresh_state, {"last_attempt_at": now.isoformat()})
+    except OSError:
+        pass
+
+    try:
+        snapshot = parse_oauth_usage(query_oauth_usage_wsl(timeout=timeout))
+        _write_snapshot(destination, snapshot)
+        return snapshot
+    except (ClaudeError, OSError) as error:
+        if _has_quota_windows(cached):
+            return cached
+        return unavailable_snapshot("claude", f"Claude active refresh unavailable: {error}")
 
 
 def compact_status(snapshot: ProviderSnapshot) -> str:

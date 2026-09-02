@@ -43,6 +43,13 @@ class WindowsUiTests(unittest.TestCase):
         self.assertEqual(len(time_labels), 1)
         self.assertEqual(time_labels[0].get("Foreground"), "{StaticResource TimeAccentBrush}")
 
+        parent_by_child = {child: parent for parent in window.iter() for child in parent}
+        quota_row = parent_by_child[time_labels[0]]
+        column_definitions = quota_row.find(f"{{{namespace}}}Grid.ColumnDefinitions")
+        self.assertIsNotNone(column_definitions)
+        value_column = list(column_definitions)[2]
+        self.assertEqual(value_column.get("Width"), "68")
+
     def test_tray_executable_has_a_multi_size_application_icon(self) -> None:
         project_directory = Path(__file__).parents[1] / "windows" / "QuotaWatch.Tray"
         project = ElementTree.parse(project_directory / "QuotaWatch.Tray.csproj").getroot()

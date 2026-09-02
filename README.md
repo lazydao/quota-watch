@@ -18,7 +18,7 @@ Windows notification-area and terminal quota monitor for Claude Code and Codex. 
 - Auto-refreshing terminal dashboard with `quota watch`
 - Machine-readable output with `quota --json`
 - Multi-bucket Codex quota support through `rateLimitsByLimitId`
-- Claude 5-hour and 7-day quota support through its local status-line JSON
+- Claude 5-hour and 7-day quota support through a 10-minute WSL OAuth refresh with local status-line fallback
 - Claude and Codex subscription-plan labels when their official CLIs expose them
 - No browser cookies, OAuth tokens, API keys, or session keys in the cache
 
@@ -133,7 +133,9 @@ Claude Code exposes quota percentages and reset timestamps to local status-line 
 quota setup-claude
 ```
 
-Quota Watch stores only the filtered quota snapshot under the user's local cache directory. It reads Claude's subscription label from the official `claude auth status --json` command. On Windows it tries the local Claude install first, then the default WSL distribution. Only `subscriptionType` is retained; account and organization details are discarded.
+Quota Watch stores only the filtered quota snapshot under the user's local cache directory. On Windows, it can refresh Claude usage every 10 minutes through the OAuth login already owned by Claude Code in the default WSL distribution. The HTTPS request runs inside WSL, sends the access token only to `api.anthropic.com`, and returns only the 5-hour and 7-day utilization, reset timestamps, and subscription type to Windows. Quota Watch never writes or refreshes Claude credentials. Set `QUOTA_WATCH_CLAUDE_WSL_DISTRO` when the Claude login is in a non-default distribution.
+
+The OAuth usage endpoint is not a documented public Anthropic API, so the status-line bridge remains the failure-safe fallback. See [Claude active refresh](docs/claude-active-refresh.md) for the exact security and compatibility boundary.
 
 Claude Code may omit `rate_limits` before the first model response. During that normal startup window, the bridge waits quietly or displays the last cached quota instead of reporting an error.
 
@@ -182,7 +184,8 @@ Open a new terminal after installing pipx. If `quota` works in PowerShell but th
 
 ### Claude is unavailable or stale
 
-- Run `quota setup-claude` or `quota setup-claude --wsl` for the environment where Claude Code runs.
+- Confirm that Claude Code is logged in with a Claude.ai subscription in the default WSL distribution, or set `QUOTA_WATCH_CLAUDE_WSL_DISTRO`.
+- Run `quota setup-claude` or `quota setup-claude --wsl` to keep the status-line fallback available.
 - Start or continue Claude Code and send at least one model request; startup status-line input may not contain `rate_limits` yet.
 - `Stale` means the last valid Claude status-line snapshot has not been refreshed recently. It is not an authentication failure by itself.
 - Preview a WSL setup without changing files with `quota setup-claude --wsl --dry-run`.
@@ -232,13 +235,13 @@ Quota Watch intentionally leaves provider-owned Claude and Codex authentication 
 ## Data flow and privacy
 
 ```text
-Claude status line -- filtered quota snapshot --> local cache --+
-Claude auth status ---------------------------> plan label   |
-                                                              +--> quota CLI --> terminal / JSON --> tray app
-Codex CLI -------- app-server JSON-RPC -----------------------+
+Claude WSL OAuth -- filtered usage (10 min) --> local cache --+
+Claude status line -------- fallback snapshot --------------|
+                                                             +--> quota CLI --> terminal / JSON --> tray app
+Codex CLI -------- app-server JSON-RPC ----------------------+
 ```
 
-Claude data can be marked stale when no Claude Code session has refreshed the status line recently. Codex App Server is currently an experimental interface, so Quota Watch keeps that protocol behind an isolated adapter.
+Claude data can be marked stale when both the active OAuth refresh and status-line fallback have stopped producing valid snapshots. Cached windows are hidden after their reset timestamp passes. Codex App Server is currently an experimental interface, so Quota Watch keeps that protocol behind an isolated adapter.
 
 See [SECURITY.md](SECURITY.md) for the stored-data boundary and private vulnerability-reporting instructions.
 

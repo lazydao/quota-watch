@@ -14,6 +14,7 @@ from .claude import (
     ClaudeError,
     compact_status,
     configure_statusline,
+    fetch_claude_snapshot,
     ingest_statusline,
     read_cached_snapshot,
 )
@@ -48,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def collect_snapshots(codex_timeout: float) -> list[ProviderSnapshot]:
-    return [read_cached_snapshot(), fetch_codex_snapshot(timeout=codex_timeout)]
+    return [fetch_claude_snapshot(), fetch_codex_snapshot(timeout=codex_timeout)]
 
 
 def _json_payload(snapshots: list[ProviderSnapshot]) -> dict[str, object]:
