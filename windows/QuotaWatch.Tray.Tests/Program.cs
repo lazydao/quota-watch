@@ -102,6 +102,17 @@ catch (InvalidOperationException)
 }
 
 Assert(unsupportedSchemaRejected, "unsupported schema rejection");
+var sparkSnapshot = QuotaSnapshotParser.Parse("""
+{"schema_version":1,"providers":[{"provider":"codex","status":"available","buckets":[
+{"bucket_id":"codex","name":"Codex","windows":[{"label":"1w","used_percent":10}]},
+{"bucket_id":"codex_bengalfox","name":"GPT-5.3-Codex-Spark","windows":[{"label":"1w","used_percent":100}]}]}]}
+""");
+dashboard.ApplySnapshot(sparkSnapshot);
+Assert(dashboard.Providers[0].Buckets.Count == 1, "Spark hidden from panel");
+Assert(dashboard.Severity == QuotaSeverity.Normal, "hidden Spark does not trigger warning");
+Assert(dashboard.TrayTooltip.Contains("Codex 10.0%", StringComparison.Ordinal), "tooltip uses visible quota");
+Assert(sparkSnapshot.Providers[0].Buckets.Count == 2, "raw Spark data preserved");
+
 Console.WriteLine("QuotaWatch.Tray smoke tests passed.");
 
 static void Assert(bool condition, string description)

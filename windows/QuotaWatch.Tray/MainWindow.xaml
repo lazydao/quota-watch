@@ -120,12 +120,15 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <Ellipse Width="8" Height="8" Fill="{Binding StatusBrush}" VerticalAlignment="Center" />
-                                        <TextBlock Grid.Column="1"
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                        <TextBlock
                                                    Text="{Binding Name}"
                                                    Foreground="#FFE9EBF5"
                                                    FontWeight="SemiBold"
                                                    FontSize="16"
                                                    Margin="8,0,0,0" />
+                                        <TextBlock Text="{Binding PlanText}" Foreground="#FF9CA5BD" FontSize="10" Margin="9,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
                                         <TextBlock Grid.Column="2" Text="{Binding StatusLabel}" Foreground="{Binding StatusBrush}" FontSize="12" VerticalAlignment="Center" />
                                     </Grid>
 
@@ -139,7 +142,6 @@
                                                             <ColumnDefinition Width="Auto" />
                                                         </Grid.ColumnDefinitions>
                                                         <TextBlock Text="{Binding Name}" Foreground="#FFD3D7E8" FontSize="13" />
-                                                        <TextBlock Grid.Column="1" Text="{Binding PlanText}" Foreground="#FF7F88A4" FontSize="10" />
                                                     </Grid>
                                                     <ItemsControl ItemsSource="{Binding Windows}">
                                                         <ItemsControl.ItemTemplate>

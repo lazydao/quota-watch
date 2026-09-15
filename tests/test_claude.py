@@ -25,6 +25,30 @@ from quota_watch.models import unavailable_snapshot
 
 
 class ClaudeBridgeTests(unittest.TestCase):
+    def test_model_limits_survive_cache_and_statusline(self) -> None:
+        payload = {"subscription_type": "max", "limits": [
+            {"kind": "weekly_all", "percent": 57, "resets_at": "2027-01-20T00:00:00Z"},
+            {"kind": "weekly_scoped", "percent": 65, "model_name": "Fable", "resets_at": "2027-01-20T00:00:00Z"},
+            {"kind": "weekly_scoped", "percent": None, "model_name": "Missing"},
+            None,
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "claude.json"
+            with patch("quota_watch.claude.query_oauth_usage_wsl", return_value=payload):
+                snapshot = fetch_claude_snapshot(destination=destination, refresh_state=Path(directory) / "refresh.json")
+            self.assertEqual([b.name for b in snapshot.buckets], ["All models", "Fable"])
+            cached = read_cached_snapshot(destination)
+            self.assertEqual(cached.buckets[1].windows[0].used_percent, 65)
+            ingest_statusline({"rate_limits": {"five_hour": {"used_percentage": 4, "resets_at": 1800016200}}}, destination)
+            cached = read_cached_snapshot(destination)
+            self.assertEqual(cached.buckets[1].name, "Fable")
+            self.assertEqual(cached.buckets[1].windows[0].used_percent, 65)
+
+    def test_missing_model_limits_do_not_create_zero_bucket(self) -> None:
+        for limits in (None, {}, [], [None, {"kind": "weekly_scoped", "model_name": "Fable"}]):
+            snapshot = parse_oauth_usage({"seven_day": {"utilization": 57}, "limits": limits})
+            self.assertEqual(len(snapshot.buckets), 1)
+
     def test_oauth_usage_parses_filtered_windows(self) -> None:
         snapshot = parse_oauth_usage(
             {

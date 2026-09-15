@@ -112,11 +112,11 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
                 ? QuotaSeverity.Warning
                 : QuotaSeverity.Normal;
 
-        var summaries = providers
+        var summaries = Providers
             .Select(provider =>
             {
                 var providerMax = provider.Buckets.SelectMany(bucket => bucket.Windows).Select(window => window.UsedPercent).DefaultIfEmpty().Max();
-                return $"{DisplayProviderName(provider.Provider)} {providerMax:0.0}%";
+                return $"{provider.Name} {providerMax:0.0}%";
             })
             .ToList();
         TrayTooltip = summaries.Count == 0 ? "Quota Watch — no data" : $"Quota Watch — {string.Join(", ", summaries)}";
@@ -154,6 +154,8 @@ public sealed class ProviderViewModel
 {
     public required string Name { get; init; }
 
+    public string PlanText { get; init; } = string.Empty;
+
     public required string StatusLabel { get; init; }
 
     public required MediaBrush StatusBrush { get; init; }
@@ -190,10 +192,18 @@ public sealed class ProviderViewModel
                 _ => MediaBrushes.LightSlateGray,
             },
             Message = provider.Message ?? string.Empty,
+            PlanText = provider.Buckets.Select(bucket => bucket.PlanType)
+                .FirstOrDefault(plan => !string.IsNullOrWhiteSpace(plan))?.ToUpperInvariant() ?? string.Empty,
         };
 
         foreach (var bucket in provider.Buckets)
         {
+            if (provider.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                && (bucket.BucketId.Equals("codex_bengalfox", StringComparison.OrdinalIgnoreCase)
+                    || bucket.Name.Equals("GPT-5.3-Codex-Spark", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
             viewModel.Buckets.Add(BucketViewModel.FromSnapshot(bucket, generatedAt));
         }
 

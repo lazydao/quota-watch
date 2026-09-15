@@ -83,6 +83,19 @@ for key in ("five_hour", "seven_day"):
             "resets_at": window.get("resets_at"),
         }
 
+filtered["limits"] = []
+limits = payload.get("limits")
+for limit in limits if isinstance(limits, list) else []:
+    if not isinstance(limit, dict):
+        continue
+    scope = limit.get("scope")
+    model = scope.get("model") if isinstance(scope, dict) else None
+    filtered["limits"].append({
+        "kind": limit.get("kind"),
+        "percent": limit.get("percent"),
+        "resets_at": limit.get("resets_at"),
+        "model_name": model.get("display_name") if isinstance(model, dict) else None,
+    })
 print(json.dumps(filtered, separators=(",", ":")))
 """
 
@@ -284,7 +297,36 @@ def parse_oauth_usage(payload: dict[str, Any]) -> ProviderSnapshot:
         for window in (_parse_oauth_limit(payload.get(key), label, minutes),)
         if window is not None
     ]
-    if not windows:
+    plan_type = _normalize_subscription_type(payload.get("subscription_type"))
+    windows_by_label = {window.label: window for window in windows}
+    model_buckets = {}
+    limits = payload.get("limits")
+    for limit in limits if isinstance(limits, list) else []:
+        if not isinstance(limit, dict):
+            continue
+        kind = limit.get("kind")
+        if kind not in ("session", "weekly_all", "weekly_scoped"):
+            continue
+        window = _parse_oauth_limit(
+            {"utilization": limit.get("percent"), "resets_at": limit.get("resets_at")},
+            "5h" if kind == "session" else "7d",
+            300 if kind == "session" else 10_080,
+        )
+        if window is None:
+            continue
+        if kind != "weekly_scoped":
+            windows_by_label[window.label] = window
+            continue
+        name = limit.get("model_name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name = name.strip()
+        model_buckets[name.casefold()] = QuotaBucket(
+            bucket_id="claude_model_" + name.casefold(), name=name,
+            windows=[window], plan_type=plan_type,
+        )
+    windows = [windows_by_label[label] for _, label, _ in _RATE_LIMIT_WINDOWS if label in windows_by_label]
+    if not windows and not model_buckets:
         raise ClaudeError("Claude usage response has no usable quota windows.")
     return ProviderSnapshot(
         provider="claude",
@@ -292,11 +334,11 @@ def parse_oauth_usage(payload: dict[str, Any]) -> ProviderSnapshot:
         buckets=[
             QuotaBucket(
                 bucket_id="claude",
-                name="Claude",
+                name="All models",
                 windows=windows,
                 plan_type=_normalize_subscription_type(payload.get("subscription_type")),
             )
-        ],
+        ] + list(model_buckets.values()),
     )
 
 
@@ -340,7 +382,6 @@ def _cached_unexpired_windows(path: Path) -> dict[str, QuotaWindow]:
 
 
 def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> None:
-    bucket = snapshot.buckets[0]
     _atomic_json_write(
         destination,
         {
@@ -363,6 +404,7 @@ def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> None:
                         for window in bucket.windows
                     ],
                 }
+                for bucket in snapshot.buckets
             ],
         },
     )
@@ -397,7 +439,12 @@ def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) 
     snapshot = ProviderSnapshot(
         provider="claude",
         status="available",
-        buckets=[QuotaBucket(bucket_id="claude", name="Claude", windows=windows, plan_type=plan_type)],
+        buckets=[QuotaBucket(bucket_id="claude", name="All models", windows=windows, plan_type=plan_type)],
+    )
+    cached = read_cached_snapshot(destination)
+    snapshot.buckets.extend(
+        bucket for bucket in cached.buckets
+        if bucket.bucket_id.startswith("claude_model_") and bucket.windows
     )
     _write_snapshot(destination, snapshot)
     return snapshot
@@ -442,6 +489,7 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
             for bucket in bucket_payloads
         ]
         captured = datetime.fromisoformat(captured_at)
+        buckets = [bucket for bucket in buckets if bucket.windows or bucket.bucket_id == "claude"]
         age = (datetime.now(timezone.utc) - captured.astimezone(timezone.utc)).total_seconds()
         status = "stale" if age > stale_after_seconds else "available"
         message = f"Last Claude update is {int(age // 60)} minutes old." if status == "stale" else None

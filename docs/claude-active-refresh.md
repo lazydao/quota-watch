@@ -10,7 +10,8 @@ Claude Code status line on Windows systems whose Claude login lives in WSL.
 2. The helper reads `~/.claude/.credentials.json` inside WSL and sends the OAuth
    access token only to `https://api.anthropic.com/api/oauth/usage`.
 3. The helper filters the response to the 5-hour and 7-day utilization, reset
-   timestamps, and subscription type before writing JSON to stdout.
+   timestamps, subscription type, and model-scoped weekly limits (such as Fable)
+   before writing JSON to stdout. Model names come from the usage response.
 4. Windows stores only that filtered snapshot. OAuth access and refresh tokens,
    account data, and organization data never cross the WSL boundary and are not
    written to Quota Watch files or logs.
@@ -25,6 +26,9 @@ Claude Code status line on Windows systems whose Claude login lives in WSL.
 - Cached windows whose reset timestamp has passed are hidden instead of being
   presented as current usage.
 - Quota Watch does not refresh, rotate, or write Claude credentials.
+- All models and model-scoped limits are cached separately. Status-line updates
+  retain unexpired model buckets; missing model percentages are never shown as zero.
+- The subscription tier appears once beside the provider heading.
 
 ## Compatibility boundary
 
