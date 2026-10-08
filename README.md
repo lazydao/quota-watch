@@ -18,7 +18,7 @@ Windows notification-area and terminal quota monitor for Claude Code and Codex. 
 - Auto-refreshing terminal dashboard with `quota watch`
 - Machine-readable output with `quota --json`
 - Multi-bucket Codex quota support through `rateLimitsByLimitId`
-- Claude 5-hour and 7-day quota support through a 10-minute WSL OAuth refresh with local status-line fallback
+- Claude 5-hour and 7-day quota support through a 10-minute WSL OAuth refresh, with status-line and Windows Claude Desktop history fallback
 - Claude and Codex subscription-plan labels when their official CLIs expose them
 - No browser cookies, OAuth tokens, API keys, or session keys in the cache
 
@@ -143,6 +143,25 @@ If Claude Code already has a custom `statusLine`, `quota setup-claude` leaves it
 
 Use `quota setup-claude --dry-run` to inspect the change without writing it.
 
+### Claude Desktop fallback on Windows
+
+If the active query fails and the CLI cache is unavailable or stale, Quota Watch
+can read Claude Desktop's local `plan-usage-history.json`. The regular Windows
+app and current Microsoft Store package are detected automatically. Recent,
+complete CLI data remains preferred; otherwise, the newer usable local snapshot
+is shown without overwriting the CLI cache.
+
+The desktop fallback provides only all-model 5-hour and 7-day percentages. Its
+original capture time is preserved, and data older than 15 minutes is marked
+`Stale`. Reset times, model-specific quotas (such as Fable), and subscription
+tiers are not present in this history, so `Time —` is shown and missing fields
+are not copied from another source. A message identifies the partial fallback.
+
+This reads a local history file only: no cookies or credentials are accessed,
+no network request or model call is made, and no app settings are changed.
+Claude Desktop may pause background updates while idle; simply keeping it open
+does not guarantee fresh data. Missing or incompatible history files are ignored.
+
 ### Claude Code in WSL
 
 When the dashboard runs on Windows but Claude Code runs in WSL, connect the default distribution with:
@@ -187,7 +206,8 @@ Open a new terminal after installing pipx. If `quota` works in PowerShell but th
 - Confirm that Claude Code is logged in with a Claude.ai subscription in the default WSL distribution, or set `QUOTA_WATCH_CLAUDE_WSL_DISTRO`.
 - Run `quota setup-claude` or `quota setup-claude --wsl` to keep the status-line fallback available.
 - Start or continue Claude Code and send at least one model request; startup status-line input may not contain `rate_limits` yet.
-- `Stale` means the last valid Claude status-line snapshot has not been refreshed recently. It is not an authentication failure by itself.
+- `Stale` means the selected Claude snapshot has not been refreshed recently. It is not an authentication failure by itself.
+- A `Claude Desktop fallback` message means only local all-model percentages are available; missing time, model and plan details are expected.
 - Preview a WSL setup without changing files with `quota setup-claude --wsl --dry-run`.
 
 ### Codex is unavailable
@@ -237,11 +257,12 @@ Quota Watch intentionally leaves provider-owned Claude and Codex authentication 
 ```text
 Claude WSL OAuth -- filtered usage (10 min) --> local cache --+
 Claude status line -------- fallback snapshot --------------|
+Claude Desktop history ---- partial local fallback ---------|
                                                              +--> quota CLI --> terminal / JSON --> tray app
 Codex CLI -------- app-server JSON-RPC ----------------------+
 ```
 
-Claude data can be marked stale when both the active OAuth refresh and status-line fallback have stopped producing valid snapshots. Cached windows are hidden after their reset timestamp passes. Codex App Server is currently an experimental interface, so Quota Watch keeps that protocol behind an isolated adapter.
+Claude data can be marked stale when its available sources have stopped producing fresh snapshots. Cached windows with known reset timestamps are hidden after their reset passes; desktop history does not contain reset timestamps and is identified as a partial fallback. Codex App Server is currently an experimental interface, so Quota Watch keeps that protocol behind an isolated adapter.
 
 See [SECURITY.md](SECURITY.md) for the stored-data boundary and private vulnerability-reporting instructions.
 

@@ -139,7 +139,10 @@ def _normalize_used_percentage(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        used = float(value)
+        try:
+            used = float(value)
+        except OverflowError:
+            return None
     elif isinstance(value, str):
         try:
             used = float(value.strip())
@@ -520,6 +523,104 @@ def _has_quota_windows(snapshot: ProviderSnapshot) -> bool:
     return any(bucket.windows for bucket in snapshot.buckets)
 
 
+def _desktop_history_paths() -> list[Path]:
+    if os.name != "nt":
+        return []
+
+    paths: list[Path] = []
+    if os.environ.get("APPDATA"):
+        paths.append(Path(os.environ["APPDATA"]) / "Claude" / "plan-usage-history.json")
+    if os.environ.get("LOCALAPPDATA"):
+        paths.append(
+            Path(os.environ["LOCALAPPDATA"])
+            / "Packages"
+            / "Claude_pzs8sxrjxfjjc"
+            / "LocalCache"
+            / "Roaming"
+            / "Claude"
+            / "plan-usage-history.json"
+        )
+    return paths
+
+
+def read_desktop_snapshot(
+    source: Path | None = None,
+    stale_after_seconds: int = 900,
+) -> ProviderSnapshot:
+    newest: ProviderSnapshot | None = None
+    newest_capture = datetime.min.replace(tzinfo=timezone.utc)
+    for path in [source] if source is not None else _desktop_history_paths():
+        try:
+            if path.stat().st_size > 10 * 1024 * 1024:
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("version") != 2:
+            continue
+        samples = payload.get("samples")
+        if not isinstance(samples, list):
+            continue
+
+        now = datetime.now(timezone.utc)
+        for sample in samples:
+            if not isinstance(sample, dict) or not isinstance(sample.get("u"), dict):
+                continue
+            timestamp = sample.get("t")
+            if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+                continue
+            if timestamp <= 0:
+                continue
+            try:
+                captured = datetime.fromtimestamp(timestamp / 1000, timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                continue
+            if captured <= newest_capture or timestamp > now.timestamp() * 1000 + 60_000:
+                continue
+
+            windows = [
+                window
+                for key, label, minutes in (("fh", "5h", 300), ("sd", "7d", 10_080))
+                for window in (
+                    _parse_limit({"used_percentage": sample["u"].get(key)}, label, minutes),
+                )
+                if window is not None
+            ]
+            if not windows:
+                continue
+            age = max(0.0, (now - captured).total_seconds())
+            newest = ProviderSnapshot(
+                provider="claude",
+                status="stale" if age > stale_after_seconds else "available",
+                buckets=[QuotaBucket(bucket_id="claude", name="All models", windows=windows)],
+                captured_at=captured.isoformat(),
+                message=(
+                    f"Claude Desktop fallback ({int(age // 60)} min old). "
+                    "Reset times, model quotas and plan unavailable."
+                ),
+            )
+            newest_capture = captured
+
+    return newest or unavailable_snapshot("claude", "Claude Desktop quota history is unavailable.")
+
+
+def _local_fallback_snapshot(cached: ProviderSnapshot) -> ProviderSnapshot:
+    # Prefer recent CLI data over the desktop app's partial history.
+    if cached.status == "available" and _has_quota_windows(cached):
+        return cached
+    desktop = read_desktop_snapshot()
+    if not _has_quota_windows(desktop):
+        return cached
+    if not _has_quota_windows(cached):
+        return desktop
+    try:
+        desktop_capture = datetime.fromisoformat(desktop.captured_at).astimezone(timezone.utc)
+        cached_capture = datetime.fromisoformat(cached.captured_at).astimezone(timezone.utc)
+    except (OverflowError, TypeError, ValueError):
+        return cached
+    return desktop if desktop_capture > cached_capture else cached
+
+
 def fetch_claude_snapshot(
     timeout: float = 8.0,
     destination: Path | None = None,
@@ -531,7 +632,7 @@ def fetch_claude_snapshot(
     cached = read_cached_snapshot(destination)
     now = datetime.now(timezone.utc)
     if not _active_refresh_due(refresh_state, refresh_interval_seconds, now):
-        return cached
+        return _local_fallback_snapshot(cached)
 
     try:
         _atomic_json_write(refresh_state, {"last_attempt_at": now.isoformat()})
@@ -543,8 +644,9 @@ def fetch_claude_snapshot(
         _write_snapshot(destination, snapshot)
         return snapshot
     except (ClaudeError, OSError) as error:
-        if _has_quota_windows(cached):
-            return cached
+        fallback = _local_fallback_snapshot(cached)
+        if _has_quota_windows(fallback):
+            return fallback
         return unavailable_snapshot("claude", f"Claude active refresh unavailable: {error}")
 
 

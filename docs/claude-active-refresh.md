@@ -29,6 +29,19 @@ Claude Code status line on Windows systems whose Claude login lives in WSL.
 - All models and model-scoped limits are cached separately. Status-line updates
   retain unexpired model buckets; missing model percentages are never shown as zero.
 - The subscription tier appears once beside the provider heading.
+- When the active query fails or is cooling down, recent CLI cache data stays
+  preferred. If that cache is stale or has no usable windows, Windows can read
+  Claude Desktop's local `plan-usage-history.json` as a partial fallback. Of the
+  usable stale CLI cache and desktop history, the newer capture is selected.
+- Desktop samples retain their original capture time; samples older than
+  15 minutes are marked stale. The desktop fallback never overwrites the CLI
+  cache or changes the 10-minute OAuth request limit.
+- Desktop history supplies only all-model 5-hour and 7-day percentages. Reset
+  times, model-specific quotas and subscription tiers are unknown on this path:
+  `Time —` is shown, and no old fields are merged into the partial snapshot.
+- Both the regular Windows installation and the current Microsoft Store package
+  are detected. Reading the history does not access cookies or credentials,
+  contact a provider endpoint, or change Claude Desktop's settings.
 
 ## Compatibility boundary
 
@@ -37,6 +50,12 @@ documented public Anthropic API. It may change without notice. The status-line
 fallback and failure-safe cache behavior are therefore required parts of this
 feature.
 
+The desktop history is also a private, versioned file format, not a supported
+public API. Only its observed version-2 quota samples are accepted; missing,
+unreadable, malformed or unsupported histories are ignored. Claude Desktop may
+pause its own background updates while idle, so leaving the app open does not
+guarantee fresh fallback data.
+
 ## Acceptance checks
 
 - Successful responses populate the 5-hour and 7-day windows.
@@ -44,3 +63,6 @@ feature.
 - HTTP, authentication, timeout, malformed-response, and missing-credential
   failures retain the last valid snapshot.
 - Tests and logs contain no credential values.
+- Desktop fallback preserves capture time, ignores unrelated fields, never
+  invents missing windows, and never combines records from different sources.
+- Successful active queries recover automatically to the complete data source.

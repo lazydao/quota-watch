@@ -62,6 +62,25 @@ Assert(!missingTime.HasElapsedTime, "missing time availability");
 Assert(missingTime.TimeText == "Time —", "missing time label");
 Assert(missingTime.Severity == QuotaSeverity.Warning, "missing time fallback warning");
 
+var desktopFallback = QuotaSnapshotParser.Parse("""
+{"schema_version":1,"providers":[{"provider":"claude","status":"stale",
+"captured_at":"2026-10-08T04:12:29Z",
+"message":"Claude Desktop fallback (28 min old). Reset times, model quotas and plan unavailable.",
+"buckets":[{"bucket_id":"claude","name":"All models","plan_type":null,
+"windows":[{"label":"5h","used_percent":9,"window_minutes":300,"resets_at":null},
+{"label":"7d","used_percent":4,"window_minutes":10080,"resets_at":null}]}]}]}
+""");
+var desktopDashboard = new DashboardViewModel();
+desktopDashboard.ApplySnapshot(desktopFallback);
+var desktopProvider = desktopDashboard.Providers[0];
+Assert(desktopProvider.StatusLabel == "Stale", "old desktop history is not live");
+Assert(desktopProvider.Message.Contains("Claude Desktop fallback", StringComparison.Ordinal), "desktop source message");
+Assert(desktopProvider.PlanText == string.Empty, "missing desktop plan is unknown");
+Assert(desktopProvider.Buckets.Count == 1, "missing desktop model quotas are not invented");
+Assert(desktopProvider.Buckets[0].Windows.Count == 2, "desktop all-model windows");
+Assert(desktopProvider.Buckets[0].Windows.All(quotaWindow => quotaWindow.TimeText == "Time —"), "desktop time is unknown");
+Assert(desktopProvider.Buckets[0].Windows.All(quotaWindow => quotaWindow.ResetText == "Reset time unavailable"), "desktop reset is unknown");
+
 var invalidTime = QuotaWindowViewModel.FromSnapshot(
     new QuotaWatch.Tray.Models.QuotaWindow
     {
