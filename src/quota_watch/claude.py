@@ -11,6 +11,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -474,7 +475,83 @@ def _cached_unexpired_windows(path: Path) -> dict[str, QuotaWindow]:
         return {}
 
 
-def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> None:
+def _reset_time_key(bucket_id: Any, label: Any, minutes: Any) -> tuple[str, str, int] | None:
+    if not isinstance(bucket_id, str) or not isinstance(label, str):
+        return None
+    if type(minutes) is not int or minutes <= 0:
+        return None
+    return bucket_id, label, minutes
+
+
+def _cached_reset_times(source: Path) -> dict[tuple[str, str, int], int]:
+    try:
+        if source.stat().st_size > 1024 * 1024:
+            return {}
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(payload, dict) or payload.get("provider") != "claude":
+        return {}
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    remembered: dict[tuple[str, str, int], int] = {}
+
+    def remember(bucket_id: Any, window: Any) -> None:
+        if not isinstance(window, dict):
+            return
+        key = _reset_time_key(bucket_id, window.get("label"), window.get("window_minutes"))
+        resets_at = window.get("resets_at")
+        if key is not None and type(resets_at) is int and resets_at > now:
+            remembered[key] = resets_at
+
+    entries = payload.get("remembered_reset_times")
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict):
+            remember(entry.get("bucket_id"), entry)
+    buckets = payload.get("buckets")
+    for bucket in buckets if isinstance(buckets, list) else []:
+        if not isinstance(bucket, dict):
+            continue
+        windows = bucket.get("windows")
+        for window in windows if isinstance(windows, list) else []:
+            remember(bucket.get("bucket_id"), window)
+    return remembered
+
+
+def _reuse_reset_times(
+    snapshot: ProviderSnapshot, remembered: dict[tuple[str, str, int], int],
+) -> ProviderSnapshot:
+    now = int(datetime.now(timezone.utc).timestamp())
+    reused = False
+    buckets = []
+    for bucket in snapshot.buckets:
+        windows = []
+        for window in bucket.windows:
+            key = _reset_time_key(bucket.bucket_id, window.label, window.window_minutes)
+            resets_at = remembered.get(key) if key is not None else None
+            if window.resets_at is None and resets_at is not None and resets_at > now:
+                window = replace(window, resets_at=resets_at)
+                reused = True
+            windows.append(window)
+        buckets.append(replace(bucket, windows=windows))
+    message = snapshot.message
+    if reused and message:
+        message += " Using remembered reset times where available."
+    return replace(snapshot, buckets=buckets, message=message)
+
+
+def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> ProviderSnapshot:
+    remembered = _cached_reset_times(destination)
+    snapshot = _reuse_reset_times(snapshot, remembered)
+    now = int(datetime.now(timezone.utc).timestamp())
+    for bucket in snapshot.buckets:
+        for window in bucket.windows:
+            key = _reset_time_key(bucket.bucket_id, window.label, window.window_minutes)
+            if key is None or window.resets_at is None:
+                continue
+            remembered.pop(key, None)
+            if type(window.resets_at) is int and window.resets_at > now:
+                remembered[key] = window.resets_at
     _atomic_json_write(
         destination,
         {
@@ -482,6 +559,10 @@ def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> None:
             "provider": snapshot.provider,
             "status": snapshot.status,
             "captured_at": snapshot.captured_at,
+            "remembered_reset_times": [
+                {"bucket_id": bucket_id, "label": label, "window_minutes": minutes, "resets_at": resets_at}
+                for (bucket_id, label, minutes), resets_at in remembered.items()
+            ],
             "buckets": [
                 {
                     "bucket_id": bucket.bucket_id,
@@ -501,6 +582,7 @@ def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> None:
             ],
         },
     )
+    return snapshot
 
 
 def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) -> ProviderSnapshot:
@@ -539,8 +621,7 @@ def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) 
         bucket for bucket in cached.buckets
         if bucket.bucket_id.startswith("claude_model_") and bucket.windows
     )
-    _write_snapshot(destination, snapshot)
-    return snapshot
+    return _write_snapshot(destination, snapshot)
 
 
 def read_cached_snapshot(
@@ -694,7 +775,7 @@ def read_desktop_snapshot(
                 captured_at=captured.isoformat(),
                 message=(
                     f"Claude Desktop fallback ({int(age // 60)} min old). "
-                    "Reset times, model quotas and plan unavailable."
+                    "Model quotas and plan unavailable."
                 ),
             )
             newest_capture = captured
@@ -702,13 +783,14 @@ def read_desktop_snapshot(
     return newest or unavailable_snapshot("claude", "Claude Desktop quota history is unavailable.")
 
 
-def _local_fallback_snapshot(cached: ProviderSnapshot) -> ProviderSnapshot:
+def _local_fallback_snapshot(cached: ProviderSnapshot, destination: Path) -> ProviderSnapshot:
     # Prefer recent CLI data over the desktop app's partial history.
     if cached.status == "available" and _has_quota_windows(cached):
         return cached
     desktop = read_desktop_snapshot()
     if not _has_quota_windows(desktop):
         return cached
+    desktop = _reuse_reset_times(desktop, _cached_reset_times(destination))
     if not _has_quota_windows(cached):
         return desktop
     try:
@@ -731,7 +813,7 @@ def fetch_claude_snapshot(
     cached = read_cached_snapshot(destination, enrich_plan=False)
     now = datetime.now(timezone.utc)
     if not _active_refresh_due(refresh_state, refresh_interval_seconds, now):
-        return _local_fallback_snapshot(cached)
+        return _local_fallback_snapshot(cached, destination)
 
     try:
         _atomic_json_write(refresh_state, {"last_attempt_at": now.isoformat()})
@@ -741,10 +823,9 @@ def fetch_claude_snapshot(
     deadline = time.monotonic() + timeout
     try:
         snapshot = parse_oauth_usage(query_oauth_usage_windows(timeout=timeout))
-        _write_snapshot(destination, snapshot)
-        return snapshot
+        return _write_snapshot(destination, snapshot)
     except (ClaudeError, OSError) as windows_error:
-        fallback = _local_fallback_snapshot(cached)
+        fallback = _local_fallback_snapshot(cached, destination)
         if fallback.status == "available" and _has_quota_windows(fallback):
             return fallback
         try:
@@ -752,8 +833,7 @@ def fetch_claude_snapshot(
             if remaining <= 0:
                 raise ClaudeError("Claude query timed out before WSL fallback.")
             snapshot = parse_oauth_usage(query_oauth_usage_wsl(timeout=remaining))
-            _write_snapshot(destination, snapshot)
-            return snapshot
+            return _write_snapshot(destination, snapshot)
         except (ClaudeError, OSError) as wsl_error:
             failure = f"Windows: {windows_error} WSL fallback: {wsl_error}"
         if _has_quota_windows(fallback):

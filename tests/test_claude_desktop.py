@@ -92,7 +92,9 @@ class ClaudeDesktopTests(unittest.TestCase):
         self.assertEqual(first.status, "available")
         self.assertEqual([(w.label, w.used_percent) for w in first.buckets[0].windows], [("5h", 28), ("7d", 41)])
         self.assertEqual(second.buckets[0].windows[0].used_percent, 29)
-        self.assertTrue(all(w.resets_at is None for w in first.buckets[0].windows))
+        self.assertEqual(first.buckets[0].windows[0].resets_at, 2_000_000_000)
+        self.assertIsNone(first.buckets[0].windows[1].resets_at)
+        self.assertIn("Using remembered reset times", first.message)
         self.assertIsNone(first.buckets[0].plan_type)
         self.assertEqual(len(first.buckets), 1)
         self.assertEqual(
@@ -261,7 +263,7 @@ class ClaudeDesktopTests(unittest.TestCase):
         self.assertEqual(first.buckets[0].windows[0].used_percent, 9)
         self.assertEqual(second.buckets[0].windows[0].used_percent, 10)
         self.assertIsNone(first.buckets[0].plan_type)
-        self.assertIsNone(first.buckets[0].windows[0].resets_at)
+        self.assertEqual(first.buckets[0].windows[0].resets_at, 2_000_000_000)
         self.assertEqual(len(first.buckets), 1)
 
     def test_recent_complete_cache_stays_preferred_after_query_failure(self) -> None:

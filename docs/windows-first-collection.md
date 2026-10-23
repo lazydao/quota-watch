@@ -22,8 +22,12 @@ consuming model tokens. Keep the flyout layout and JSON schema unchanged.
 
 The 10-minute interval limits collection attempts, including their fallback
 chain, across CLI and tray runs. It does not turn cached data into a fresh
-server response. A successful Windows query never starts WSL. Missing reset
-times, plan information, or model windows are never inferred across sources.
+server response. A successful Windows query never starts WSL. A missing reset
+time may reuse the last still-future reset cached for the exact bucket, window
+label and duration; it is never advanced into a new cycle. Percentages and
+capture times stay with their selected source. Missing plan information or
+model windows are not filled from another source. The single-account cache
+assumes all configured Claude sources use the same account.
 
 ### Codex
 

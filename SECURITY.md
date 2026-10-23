@@ -9,7 +9,7 @@ Quota Watch is designed to avoid storing provider credentials.
 - Quota Watch does not refresh, rotate, or write Claude credentials. Active-refresh failures fall back to filtered local quota snapshots, including status-line cache and Windows Claude Desktop history.
 - The Claude bridge stores only quota percentages, reset timestamps, and the capture time.
 - On Windows, the Claude Desktop fallback reads only `plan-usage-history.json` from the regular app or current Microsoft Store data directory. It returns filtered 5-hour and 7-day percentages and their original capture time, discards organization and unrelated fields, and does not overwrite the CLI cache.
-- The desktop fallback never reads cookies, session keys, or authentication files, never calls a network endpoint, and never changes Claude Desktop settings. Missing reset times, model quotas and subscription tiers are not inferred from other sources.
+- The desktop fallback never reads cookies, session keys, or authentication files, never calls a network endpoint, and never changes Claude Desktop settings. Only a matching, still-future reset time may be reused from the existing single-account quota cache; percentages and capture times remain from Desktop, and model quotas and subscription tiers are not copied from other sources. Reset memory contains quota window identifiers and timestamps only, and never guesses another cycle.
 - Claude account data, session IDs, working directories, cookies, and OAuth tokens are discarded.
 - Existing Claude Code status-line configuration is never overwritten automatically.
 

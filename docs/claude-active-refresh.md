@@ -32,6 +32,11 @@ Claude Code status line, preferring the existing Windows Claude Code login.
   update the same filtered cache between active refreshes.
 - Cached windows whose reset timestamp has passed are hidden instead of being
   presented as current usage.
+- Successful CLI/status-line snapshots remember reset times in the existing
+  quota cache, separately from percentages. A missing reset can reuse the last
+  still-future value for the same bucket, window label and duration, including
+  when an intervening snapshot omitted that window. A newly supplied reset
+  takes precedence. Expired values are not reused or advanced to another cycle.
 - Quota Watch does not refresh, rotate, or write Claude credentials, launch
   login, or install a CLI. The official Claude Code login must be valid for
   unattended active querying. No model call is used for querying or keepalive.
@@ -45,9 +50,12 @@ Claude Code status line, preferring the existing Windows Claude Code login.
 - Desktop samples retain their original capture time; samples older than
   15 minutes are marked stale. The desktop fallback never overwrites the CLI
   cache or changes the 10-minute OAuth request limit.
-- Desktop history supplies only all-model 5-hour and 7-day percentages. Reset
-  times, model-specific quotas and subscription tiers are unknown on this path:
-  `Time —` is shown, and no old fields are merged into the partial snapshot.
+- Desktop history supplies only all-model 5-hour and 7-day percentages. Missing
+  reset times may use the remembered values described above; `Time —` is shown
+  when no unexpired match exists. The message identifies remembered resets.
+  Percentages and capture times remain from Desktop, and no old model quotas
+  or subscription tiers are added. This single-account cache assumes all
+  configured Claude sources use the same account.
 - The regular Windows installation, legacy Store cache, and relocated Store
   history under `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc` are detected.
   Reading the history does not access cookies or credentials,
@@ -74,7 +82,9 @@ guarantee fresh fallback data.
   failures retain the last valid snapshot.
 - Tests and logs contain no credential values.
 - Desktop fallback preserves capture time, ignores unrelated fields, never
-  invents missing windows, and never combines records from different sources.
+  invents missing windows, and reuses only matching, unexpired reset times.
+- Reset memory survives missing fields/windows, prefers newly supplied resets,
+  ignores malformed metadata, and does not change the public JSON schema.
 - Successful active queries recover automatically to the complete data source.
 - Windows success or fresh local fallback does not launch WSL, including an
   auth-status subprocess just to fill an unknown subscription label.

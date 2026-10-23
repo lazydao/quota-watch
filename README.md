@@ -164,8 +164,13 @@ an unnecessary WSL query; stale history remains a last-resort fallback.
 The desktop fallback provides only all-model 5-hour and 7-day percentages. Its
 original capture time is preserved, and data older than 15 minutes is marked
 `Stale`. Reset times, model-specific quotas (such as Fable), and subscription
-tiers are not present in this history, so `Time —` is shown and missing fields
-are not copied from another source. A message identifies the partial fallback.
+tiers are not present in this history. When a reset time is missing, Quota Watch
+can reuse the most recently known, still-future reset for the exact same bucket,
+window label and duration. The new percentage and capture time stay unchanged;
+old model quotas or plan labels are not added. Unknown or expired reset times
+still show `Time —`: a new cycle is never guessed. A message identifies the
+partial fallback and any remembered reset times. The single-account cache
+assumes the configured Claude sources use the same account.
 
 This reads a local history file only: no cookies or credentials are accessed,
 no network request or model call is made, and no app settings are changed.

@@ -237,7 +237,7 @@ class WindowsFirstCollectionTests(unittest.TestCase):
         )
         result = self.fetch()
         self.assertEqual(result.buckets[0].windows[0].used_percent, 9)
-        self.assertIsNone(result.buckets[0].windows[0].resets_at)
+        self.assertEqual(result.buckets[0].windows[0].resets_at, 2_000_000_000)
         self.assertEqual(self.cache.read_bytes(), before)
         self.wsl.assert_not_called()
 
