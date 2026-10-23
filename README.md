@@ -18,7 +18,8 @@ Windows notification-area and terminal quota monitor for Claude Code and Codex. 
 - Auto-refreshing terminal dashboard with `quota watch`
 - Machine-readable output with `quota --json`
 - Multi-bucket Codex quota support through `rateLimitsByLimitId`
-- Claude 5-hour and 7-day quota support through a 10-minute WSL OAuth refresh, with status-line and Windows Claude Desktop history fallback
+- Windows-first Claude quota queries every 10 minutes, with local status-line/Desktop history and WSL fallback
+- Codex App backend discovery and active, read-only quota queries without a model call
 - Claude and Codex subscription-plan labels when their official CLIs expose them
 - No browser cookies, OAuth tokens, API keys, or session keys in the cache
 
@@ -133,7 +134,13 @@ Claude Code exposes quota percentages and reset timestamps to local status-line 
 quota setup-claude
 ```
 
-Quota Watch stores only the filtered quota snapshot under the user's local cache directory. On Windows, it can refresh Claude usage every 10 minutes through the OAuth login already owned by Claude Code in the default WSL distribution. The HTTPS request runs inside WSL, sends the access token only to `api.anthropic.com`, and returns only the 5-hour and 7-day utilization, reset timestamps, and subscription type to Windows. Quota Watch never writes or refreshes Claude credentials. Set `QUOTA_WATCH_CLAUDE_WSL_DISTRO` when the Claude login is in a non-default distribution.
+Quota Watch stores only the filtered quota snapshot under the user's local cache directory. On Windows, each 10-minute collection attempt first queries the usage endpoint using the existing Windows Claude Code login. It reads `%USERPROFILE%\.claude\.credentials.json`, or the directory selected by `CLAUDE_CONFIG_DIR`. An explicitly supplied `CLAUDE_CODE_OAUTH_TOKEN` takes priority, but must have permission to query quotas: the long-lived token from `claude setup-token` is not guaranteed to have that permission.
+
+Environment variables must be visible to the Windows `quota` process. A token exported only in a WSL shell is not imported into Windows. Restart the tray app after changing its environment.
+
+The request is a read-only HTTPS GET to `api.anthropic.com`; it sends no prompt and consumes no model tokens. Quota Watch does not install Claude Code, launch login, or write/refresh credentials. Known-expired file credentials fail locally; renew them using Claude Code itself. Merely leaving Claude Desktop open does not renew the separate Claude Code login.
+
+If the Windows query cannot run, fresh local quota data is preferred over WSL: first the filtered CLI/status-line cache, then Windows Claude Desktop history. WSL is queried only when neither has fresh usable data. Its helper keeps the WSL access token inside WSL and returns filtered quota fields only. Set `QUOTA_WATCH_CLAUDE_WSL_DISTRO` when that fallback login is in a non-default distribution. Failed queries preserve usable local data with its original capture time.
 
 The OAuth usage endpoint is not a documented public Anthropic API, so the status-line bridge remains the failure-safe fallback. See [Claude active refresh](docs/claude-active-refresh.md) for the exact security and compatibility boundary.
 
@@ -145,11 +152,12 @@ Use `quota setup-claude --dry-run` to inspect the change without writing it.
 
 ### Claude Desktop fallback on Windows
 
-If the active query fails and the CLI cache is unavailable or stale, Quota Watch
+If the Windows query fails and the CLI cache is unavailable or stale, Quota Watch
 can read Claude Desktop's local `plan-usage-history.json`. The regular Windows
 app and current Microsoft Store package are detected automatically. Recent,
 complete CLI data remains preferred; otherwise, the newer usable local snapshot
-is shown without overwriting the CLI cache.
+is selected without overwriting the CLI cache. Fresh Windows history prevents
+an unnecessary WSL query; stale history remains a last-resort fallback.
 
 The desktop fallback provides only all-model 5-hour and 7-day percentages. Its
 original capture time is preserved, and data older than 15 minutes is marked
@@ -184,7 +192,7 @@ Quota data can come from a selected non-default distribution, but the Claude sub
 
 No additional setup is needed. Quota Watch locates the official local Codex executable, launches `codex app-server`, and calls `account/rateLimits/read` over JSONL stdio. The adapter displays every quota bucket returned by the installed Codex version.
 
-Executable discovery prefers the official standalone Windows install, then the Codex Desktop bundled CLI, then `codex` on `PATH` (including npm installs).
+Executable discovery prefers the newest versioned Windows Codex App backend, then its legacy bundled executable, the official standalone Windows install, and finally `codex` on `PATH` (including npm installs). This queries the official local backend rather than scraping the app's UI or reading its tokens. The backend uses the existing login and credential-store configuration; `CODEX_HOME`, when set, is respected. No thread or model turn is started.
 
 Set `QUOTA_WATCH_CODEX_PATH` when Codex is installed in a non-standard location. Restart the tray app after changing it.
 
@@ -203,7 +211,9 @@ Open a new terminal after installing pipx. If `quota` works in PowerShell but th
 
 ### Claude is unavailable or stale
 
-- Confirm that Claude Code is logged in with a Claude.ai subscription in the default WSL distribution, or set `QUOTA_WATCH_CLAUDE_WSL_DISTRO`.
+- Confirm that Windows Claude Code is logged in with a Claude.ai subscription. If its access token has expired, let Claude Code renew it or sign in again there; Quota Watch never rotates the credentials itself.
+- Check `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` if you use them. A token that works for conversations may still lack quota-query permission; HTTP 401/403 safely fall back to other data sources.
+- WSL is a fallback, not the first source. If needed, confirm its Claude Code login or set `QUOTA_WATCH_CLAUDE_WSL_DISTRO`.
 - Run `quota setup-claude` or `quota setup-claude --wsl` to keep the status-line fallback available.
 - Start or continue Claude Code and send at least one model request; startup status-line input may not contain `rate_limits` yet.
 - `Stale` means the selected Claude snapshot has not been refreshed recently. It is not an authentication failure by itself.
@@ -255,16 +265,18 @@ Quota Watch intentionally leaves provider-owned Claude and Codex authentication 
 ## Data flow and privacy
 
 ```text
-Claude WSL OAuth -- filtered usage (10 min) --> local cache --+
+Windows Claude Code -- usage GET (10 min) --> local cache ---+
 Claude status line -------- fallback snapshot --------------|
 Claude Desktop history ---- partial local fallback ---------|
+WSL Claude OAuth ---------- last active fallback ------------|
                                                              +--> quota CLI --> terminal / JSON --> tray app
-Codex CLI -------- app-server JSON-RPC ----------------------+
+Windows Codex App / CLI --- read-only app-server JSON-RPC ---+
 ```
 
 Claude data can be marked stale when its available sources have stopped producing fresh snapshots. Cached windows with known reset timestamps are hidden after their reset passes; desktop history does not contain reset timestamps and is identified as a partial fallback. Codex App Server is currently an experimental interface, so Quota Watch keeps that protocol behind an isolated adapter.
 
 See [SECURITY.md](SECURITY.md) for the stored-data boundary and private vulnerability-reporting instructions.
+See [Windows-first collection](docs/windows-first-collection.md) for source priority, token-cost boundaries, and verification criteria.
 
 Protocol references: [Claude Code status line](https://code.claude.com/docs/en/statusline), [Codex App Server](https://developers.openai.com/codex/app-server/), and [Codex CLI installation](https://github.com/openai/codex#installing-and-running-codex-cli).
 

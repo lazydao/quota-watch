@@ -39,6 +39,11 @@ def complete_snapshot(captured: datetime) -> ProviderSnapshot:
 
 
 class ClaudeDesktopTests(unittest.TestCase):
+    def setUp(self) -> None:
+        native = patch("quota_watch.claude.query_oauth_usage_windows", side_effect=ClaudeError("no native login"))
+        native.start()
+        self.addCleanup(native.stop)
+
     def test_discovers_windows_store_and_regular_install_histories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             roaming = Path(directory) / "Roaming"
@@ -192,7 +197,7 @@ class ClaudeDesktopTests(unittest.TestCase):
                     }), encoding="utf-8")
                     second = fetch_claude_snapshot(destination=destination, refresh_state=state)
             self.assertEqual(destination.read_text(encoding="utf-8"), original)
-            self.assertEqual(query.call_count, 1)
+            self.assertEqual(query.call_count, 0)
         self.assertEqual(first.buckets[0].windows[0].used_percent, 9)
         self.assertEqual(second.buckets[0].windows[0].used_percent, 10)
         self.assertIsNone(first.buckets[0].plan_type)
@@ -243,7 +248,7 @@ class ClaudeDesktopTests(unittest.TestCase):
                 "version": 2, "samples": [sample(now - timedelta(minutes=2), {"fh": 9})],
             }), encoding="utf-8")
             with patch("quota_watch.claude._desktop_history_paths", return_value=[history]):
-                with patch("quota_watch.claude.query_oauth_usage_wsl", side_effect=[ClaudeError("offline"), payload]):
+                with patch("quota_watch.claude.query_oauth_usage_windows", side_effect=[ClaudeError("offline"), payload]):
                     first = fetch_claude_snapshot(
                         destination=destination, refresh_state=Path(directory) / "refresh.json",
                         refresh_interval_seconds=0,

@@ -28,20 +28,20 @@ def find_codex_executable() -> Path:
     candidates: list[Path] = []
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
-        # The official standalone installer uses this location.
-        candidates.append(Path(local_app_data) / "Programs" / "OpenAI" / "Codex" / "bin" / "codex.exe")
-
-    if local_app_data:
-        # Codex Desktop may expose a bundled CLI here. Keep it as a fallback.
+        # Prefer the app's current versioned backend over its legacy launcher.
         bin_dir = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
+        versions = []
+        try:
+            for candidate in bin_dir.glob("*/codex.exe"):
+                try:
+                    versions.append((candidate.stat().st_mtime, candidate))
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        candidates.extend(candidate for _, candidate in sorted(versions, reverse=True))
         candidates.append(bin_dir / "codex.exe")
-        if bin_dir.is_dir():
-            nested = sorted(
-                bin_dir.glob("*/codex.exe"),
-                key=lambda item: item.stat().st_mtime,
-                reverse=True,
-            )
-            candidates.extend(nested)
+        candidates.append(Path(local_app_data) / "Programs" / "OpenAI" / "Codex" / "bin" / "codex.exe")
 
     for name in ("codex.exe", "codex"):
         resolved = shutil.which(name)
@@ -49,8 +49,11 @@ def find_codex_executable() -> Path:
             candidates.append(Path(resolved))
 
     for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
 
     raise CodexError("Codex executable was not found. Install Codex or set QUOTA_WATCH_CODEX_PATH.")
 

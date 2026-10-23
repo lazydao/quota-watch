@@ -1,35 +1,44 @@
 # Claude active refresh
 
 Quota Watch refreshes Claude subscription usage independently of the interactive
-Claude Code status line on Windows systems whose Claude login lives in WSL.
+Claude Code status line, preferring the existing Windows Claude Code login.
 
 ## Data flow
 
-1. The Windows `quota` process starts a short-lived Python helper in the default
-   WSL distribution, or in `QUOTA_WATCH_CLAUDE_WSL_DISTRO` when configured.
-2. The helper reads `~/.claude/.credentials.json` inside WSL and sends the OAuth
-   access token only to `https://api.anthropic.com/api/oauth/usage`.
-3. The helper filters the response to the 5-hour and 7-day utilization, reset
-   timestamps, subscription type, and model-scoped weekly limits (such as Fable)
-   before writing JSON to stdout. Model names come from the usage response.
-4. Windows stores only that filtered snapshot. OAuth access and refresh tokens,
-   account data, and organization data never cross the WSL boundary and are not
-   written to Quota Watch files or logs.
+1. The Windows `quota` process first reads `CLAUDE_CODE_OAUTH_TOKEN`, when
+   explicitly set, or `.credentials.json` under `CLAUDE_CONFIG_DIR` (default
+   `%USERPROFILE%\.claude`). It never reads a token from Claude Desktop cookies.
+2. It makes a GET to `https://api.anthropic.com/api/oauth/usage`, refusing
+   redirects. Known-expired file tokens and known-missing `user:profile` scope
+   fail locally. Environment tokens must have quota-query permission too; the
+   variable does not grant extra scope or make a token long-lived.
+3. On failure, the fresh CLI/status-line cache is preferred, then fresh Windows
+   Claude Desktop history. Only if neither is usable and fresh does the process
+   start the existing short-lived WSL helper in the default distribution, or in
+   `QUOTA_WATCH_CLAUDE_WSL_DISTRO` when configured.
+4. The WSL helper reads `~/.claude/.credentials.json` inside WSL. Tokens stay in
+   that environment; only filtered usage fields return to Windows.
+5. Both active paths filter to quota utilization, reset times, subscription type
+   when known, and model-scoped weekly limits (such as Fable). Windows stores
+   only that snapshot, not tokens, account details, or organization data.
 
 ## Refresh and fallback behavior
 
-- Automatic OAuth attempts are limited to one every 10 minutes across CLI and
-  tray refreshes.
+- Automatic collection attempts, including their fallback chain, are limited to
+  one every 10 minutes across CLI and tray refreshes. The Windows and WSL paths
+  share a timeout budget rather than adding two full query timeouts.
 - A failed request never overwrites the last valid quota snapshot.
 - The existing Claude status-line bridge remains available as a fallback and may
   update the same filtered cache between active refreshes.
 - Cached windows whose reset timestamp has passed are hidden instead of being
   presented as current usage.
-- Quota Watch does not refresh, rotate, or write Claude credentials.
+- Quota Watch does not refresh, rotate, or write Claude credentials, launch
+  login, or install a CLI. The official Claude Code login must be valid for
+  unattended active querying. No model call is used for querying or keepalive.
 - All models and model-scoped limits are cached separately. Status-line updates
   retain unexpired model buckets; missing model percentages are never shown as zero.
 - The subscription tier appears once beside the provider heading.
-- When the active query fails or is cooling down, recent CLI cache data stays
+- When the Windows query fails or collection is cooling down, recent CLI cache data stays
   preferred. If that cache is stale or has no usable windows, Windows can read
   Claude Desktop's local `plan-usage-history.json` as a partial fallback. Of the
   usable stale CLI cache and desktop history, the newer capture is selected.
@@ -66,3 +75,10 @@ guarantee fresh fallback data.
 - Desktop fallback preserves capture time, ignores unrelated fields, never
   invents missing windows, and never combines records from different sources.
 - Successful active queries recover automatically to the complete data source.
+- Windows success or fresh local fallback does not launch WSL, including an
+  auth-status subprocess just to fill an unknown subscription label.
+- Missing or broken native credentials, HTTP 401/403, redirects, and malformed
+  responses fail safely without credential writes or secret-bearing errors.
+
+See [Windows-first collection](windows-first-collection.md) for the full source
+order, Codex App discovery, and acceptance criteria.

@@ -25,6 +25,14 @@ from quota_watch.models import unavailable_snapshot
 
 
 class ClaudeBridgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        native = patch("quota_watch.claude.query_oauth_usage_windows", side_effect=ClaudeError("no native login"))
+        desktop = patch("quota_watch.claude._desktop_history_paths", return_value=[])
+        native.start()
+        desktop.start()
+        self.addCleanup(native.stop)
+        self.addCleanup(desktop.stop)
+
     def test_model_limits_survive_cache_and_statusline(self) -> None:
         payload = {"subscription_type": "max", "limits": [
             {"kind": "weekly_all", "percent": 57, "resets_at": "2027-01-20T00:00:00Z"},
@@ -128,7 +136,7 @@ class ClaudeBridgeTests(unittest.TestCase):
                     first = fetch_claude_snapshot(destination=destination, refresh_state=refresh_state)
                     second = fetch_claude_snapshot(destination=destination, refresh_state=refresh_state)
 
-        self.assertEqual(query.call_count, 1)
+        self.assertEqual(query.call_count, 0)
         self.assertEqual(first.buckets[0].windows[0].used_percent, 35)
         self.assertEqual(second.buckets[0].windows[0].used_percent, 35)
 

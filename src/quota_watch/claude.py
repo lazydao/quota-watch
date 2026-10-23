@@ -8,6 +8,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +28,7 @@ _RATE_LIMIT_WINDOWS = (
 )
 
 ACTIVE_REFRESH_INTERVAL_SECONDS = 600
+_USAGE_ENDPOINT = "https://api.anthropic.com/api/oauth/usage"
 
 _WSL_USAGE_HELPER = r"""
 import json
@@ -255,6 +259,92 @@ def query_subscription_type(timeout: float = 3.0) -> str | None:
     )
 
 
+class _NoUsageRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        # Never forward a provider credential to a redirect target.
+        return None
+
+
+def query_oauth_usage_windows(timeout: float = 8.0) -> dict[str, Any]:
+    if os.name != "nt":
+        raise ClaudeError("Windows Claude usage queries are available only on Windows.")
+    if timeout <= 0:
+        raise ClaudeError("Windows Claude usage query timed out.")
+
+    access_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    plan_type = None
+    if not access_token:
+        config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+        try:
+            credentials_path = config_dir / ".credentials.json"
+            if credentials_path.stat().st_size > 1024 * 1024:
+                raise ClaudeError("Windows Claude Code credentials are invalid.")
+            credentials = json.loads(credentials_path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, ValueError, RecursionError):
+            raise ClaudeError("Windows Claude Code credentials are unavailable.") from None
+        oauth = credentials.get("claudeAiOauth") if isinstance(credentials, dict) else None
+        if not isinstance(oauth, dict):
+            raise ClaudeError("Windows Claude Code OAuth credentials are unavailable.")
+        access_token = oauth.get("accessToken")
+        if not isinstance(access_token, str) or not access_token.strip():
+            raise ClaudeError("Windows Claude Code access token is unavailable.")
+        access_token = access_token.strip()
+        expires_at = oauth.get("expiresAt")
+        if (
+            not isinstance(expires_at, bool)
+            and isinstance(expires_at, (int, float))
+            and expires_at <= datetime.now(timezone.utc).timestamp() * 1000
+        ):
+            raise ClaudeError("Windows Claude Code access token has expired; renew the login in Claude Code.")
+        scopes = oauth.get("scopes")
+        if isinstance(scopes, list) and "user:profile" not in scopes:
+            raise ClaudeError("Windows Claude Code token lacks quota-query permission (user:profile).")
+        plan_type = _normalize_subscription_type(oauth.get("subscriptionType"))
+
+    try:
+        request = urllib.request.Request(
+            _USAGE_ENDPOINT,
+            headers={
+                "Accept": "application/json",
+                "Authorization": "Bearer " + access_token,
+                "anthropic-beta": "oauth-2025-04-20",
+                "User-Agent": "claude-cli/2.1.0 (external, cli)",
+            },
+            method="GET",
+        )
+        opener = urllib.request.build_opener(_NoUsageRedirect())
+        with opener.open(request, timeout=timeout) as response:
+            body = response.read(1024 * 1024 + 1)
+        if len(body) > 1024 * 1024:
+            raise ClaudeError("Windows Claude usage response is too large.")
+        payload = json.loads(body.decode("utf-8-sig"))
+    except urllib.error.HTTPError as error:
+        raise ClaudeError(f"Windows Claude usage request failed with HTTP status {error.code}.") from None
+    except (OSError, UnicodeError, ValueError, RecursionError, urllib.error.URLError):
+        raise ClaudeError("Windows Claude usage request failed.") from None
+    if not isinstance(payload, dict):
+        raise ClaudeError("Windows Claude usage response is invalid.")
+
+    filtered: dict[str, Any] = {"subscription_type": plan_type, "limits": []}
+    for key in ("five_hour", "seven_day"):
+        window = payload.get(key)
+        if isinstance(window, dict):
+            filtered[key] = {name: window.get(name) for name in ("utilization", "resets_at")}
+    limits = payload.get("limits")
+    for limit in limits if isinstance(limits, list) else []:
+        if not isinstance(limit, dict):
+            continue
+        scope = limit.get("scope")
+        model = scope.get("model") if isinstance(scope, dict) else None
+        filtered["limits"].append({
+            "kind": limit.get("kind"),
+            "percent": limit.get("percent"),
+            "resets_at": limit.get("resets_at"),
+            "model_name": model.get("display_name") if isinstance(model, dict) else None,
+        })
+    return filtered
+
+
 def query_oauth_usage_wsl(timeout: float = 8.0, distro: str | None = None) -> dict[str, Any]:
     if os.name != "nt":
         raise ClaudeError("Claude active refresh through WSL is available only on Windows.")
@@ -453,7 +543,9 @@ def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) 
     return snapshot
 
 
-def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 900) -> ProviderSnapshot:
+def read_cached_snapshot(
+    source: Path | None = None, stale_after_seconds: int = 900, *, enrich_plan: bool = True,
+) -> ProviderSnapshot:
     source = source or cache_path()
     if not source.exists():
         return unavailable_snapshot("claude", "Run `quota setup-claude`, then use Claude Code once.")
@@ -461,7 +553,7 @@ def read_cached_snapshot(source: Path | None = None, stale_after_seconds: int = 
         payload = json.loads(source.read_text(encoding="utf-8"))
         captured_at = payload["captured_at"]
         bucket_payloads = payload.get("buckets", [])
-        if bucket_payloads and not _normalize_subscription_type(bucket_payloads[0].get("plan_type")):
+        if enrich_plan and bucket_payloads and not _normalize_subscription_type(bucket_payloads[0].get("plan_type")):
             plan_type = query_subscription_type()
             if plan_type:
                 bucket_payloads[0]["plan_type"] = plan_type
@@ -629,7 +721,8 @@ def fetch_claude_snapshot(
 ) -> ProviderSnapshot:
     destination = destination or cache_path()
     refresh_state = refresh_state or oauth_refresh_state_path()
-    cached = read_cached_snapshot(destination)
+    # Collection must not start WSL merely to fill a missing plan label.
+    cached = read_cached_snapshot(destination, enrich_plan=False)
     now = datetime.now(timezone.utc)
     if not _active_refresh_due(refresh_state, refresh_interval_seconds, now):
         return _local_fallback_snapshot(cached)
@@ -639,15 +732,27 @@ def fetch_claude_snapshot(
     except OSError:
         pass
 
+    deadline = time.monotonic() + timeout
     try:
-        snapshot = parse_oauth_usage(query_oauth_usage_wsl(timeout=timeout))
+        snapshot = parse_oauth_usage(query_oauth_usage_windows(timeout=timeout))
         _write_snapshot(destination, snapshot)
         return snapshot
-    except (ClaudeError, OSError) as error:
+    except (ClaudeError, OSError) as windows_error:
         fallback = _local_fallback_snapshot(cached)
+        if fallback.status == "available" and _has_quota_windows(fallback):
+            return fallback
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ClaudeError("Claude query timed out before WSL fallback.")
+            snapshot = parse_oauth_usage(query_oauth_usage_wsl(timeout=remaining))
+            _write_snapshot(destination, snapshot)
+            return snapshot
+        except (ClaudeError, OSError) as wsl_error:
+            failure = f"Windows: {windows_error} WSL fallback: {wsl_error}"
         if _has_quota_windows(fallback):
             return fallback
-        return unavailable_snapshot("claude", f"Claude active refresh unavailable: {error}")
+        return unavailable_snapshot("claude", f"Claude active refresh unavailable: {failure}")
 
 
 def compact_status(snapshot: ProviderSnapshot) -> str:
