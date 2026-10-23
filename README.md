@@ -154,7 +154,9 @@ Use `quota setup-claude --dry-run` to inspect the change without writing it.
 
 If the Windows query fails and the CLI cache is unavailable or stale, Quota Watch
 can read Claude Desktop's local `plan-usage-history.json`. The regular Windows
-app and current Microsoft Store package are detected automatically. Recent,
+app and current Microsoft Store package are detected automatically. Relocated
+Store data under `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc`
+is also detected, even when the legacy Store history no longer exists. Recent,
 complete CLI data remains preferred; otherwise, the newer usable local snapshot
 is selected without overwriting the CLI cache. Fresh Windows history prevents
 an unnecessary WSL query; stale history remains a last-resort fallback.

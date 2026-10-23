@@ -41,10 +41,10 @@ def complete_snapshot(captured: datetime) -> ProviderSnapshot:
 class ClaudeDesktopTests(unittest.TestCase):
     def setUp(self) -> None:
         native = patch("quota_watch.claude.query_oauth_usage_windows", side_effect=ClaudeError("no native login"))
-        native.start()
+        self.native_query = native.start()
         self.addCleanup(native.stop)
 
-    def test_discovers_windows_store_and_regular_install_histories(self) -> None:
+    def test_discovers_regular_legacy_store_and_relocated_store_histories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             roaming = Path(directory) / "Roaming"
             local = Path(directory) / "Local"
@@ -57,7 +57,67 @@ class ClaudeDesktopTests(unittest.TestCase):
                 roaming / "Claude" / "plan-usage-history.json",
                 local / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache"
                 / "Roaming" / "Claude" / "plan-usage-history.json",
+                local / "Claude-Data" / "claude_pzs8sxrjxfjjc" / "plan-usage-history.json",
             ])
+
+    def test_relocated_history_updates_collection_without_wsl_or_cache_overwrite(self) -> None:
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = SimpleNamespace(name="nt", environ={
+                "APPDATA": str(root / "Roaming"), "LOCALAPPDATA": str(root / "Local"),
+            })
+            history = root / "Local" / "Claude-Data" / "claude_pzs8sxrjxfjjc" / "plan-usage-history.json"
+            history.parent.mkdir(parents=True)
+            captured = now - timedelta(minutes=2)
+            history.write_text(json.dumps({
+                "version": 2, "samples": [sample(captured, {"fh": 28, "sd": 41})],
+            }), encoding="utf-8")
+            with patch("quota_watch.claude.os", environment):
+                paths = _desktop_history_paths()
+            destination = root / "cache" / "claude.json"
+            state = root / "cache" / "refresh.json"
+            _write_snapshot(destination, complete_snapshot(now - timedelta(days=2)))
+            before = destination.read_bytes()
+            with patch("quota_watch.claude._desktop_history_paths", return_value=paths):
+                with patch("quota_watch.claude.query_oauth_usage_wsl") as wsl:
+                    first = fetch_claude_snapshot(destination=destination, refresh_state=state)
+                    history.write_text(json.dumps({
+                        "version": 2, "samples": [sample(now - timedelta(minutes=1), {"fh": 29, "sd": 41})],
+                    }), encoding="utf-8")
+                    second = fetch_claude_snapshot(destination=destination, refresh_state=state)
+            wsl.assert_not_called()
+            self.native_query.assert_called_once()
+            self.assertEqual(destination.read_bytes(), before)
+        self.assertEqual(first.status, "available")
+        self.assertEqual([(w.label, w.used_percent) for w in first.buckets[0].windows], [("5h", 28), ("7d", 41)])
+        self.assertEqual(second.buckets[0].windows[0].used_percent, 29)
+        self.assertTrue(all(w.resets_at is None for w in first.buckets[0].windows))
+        self.assertIsNone(first.buckets[0].plan_type)
+        self.assertEqual(len(first.buckets), 1)
+        self.assertEqual(
+            first.captured_at,
+            datetime.fromtimestamp(int(captured.timestamp() * 1000) / 1000, timezone.utc).isoformat(),
+        )
+
+    def test_broken_relocated_history_does_not_hide_valid_legacy_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = SimpleNamespace(name="nt", environ={
+                "APPDATA": str(root / "Roaming"), "LOCALAPPDATA": str(root / "Local"),
+            })
+            legacy = root / "Roaming" / "Claude" / "plan-usage-history.json"
+            relocated = root / "Local" / "Claude-Data" / "claude_pzs8sxrjxfjjc" / "plan-usage-history.json"
+            legacy.parent.mkdir(parents=True)
+            relocated.parent.mkdir(parents=True)
+            legacy.write_text(json.dumps({
+                "version": 2, "samples": [sample(datetime.now(timezone.utc), {"fh": 9})],
+            }), encoding="utf-8")
+            relocated.write_text("{", encoding="utf-8")
+            with patch("quota_watch.claude.os", environment):
+                snapshot = read_desktop_snapshot()
+        self.assertEqual(snapshot.status, "available")
+        self.assertEqual(snapshot.buckets[0].windows[0].used_percent, 9)
 
     def test_automatic_discovery_is_windows_only(self) -> None:
         with patch("quota_watch.claude.os", SimpleNamespace(name="posix", environ={})):

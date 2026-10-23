@@ -632,6 +632,12 @@ def _desktop_history_paths() -> list[Path]:
             / "Claude"
             / "plan-usage-history.json"
         )
+        paths.append(
+            Path(os.environ["LOCALAPPDATA"])
+            / "Claude-Data"
+            / "claude_pzs8sxrjxfjjc"
+            / "plan-usage-history.json"
+        )
     return paths
 
 

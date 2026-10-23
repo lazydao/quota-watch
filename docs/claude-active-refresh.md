@@ -48,8 +48,9 @@ Claude Code status line, preferring the existing Windows Claude Code login.
 - Desktop history supplies only all-model 5-hour and 7-day percentages. Reset
   times, model-specific quotas and subscription tiers are unknown on this path:
   `Time —` is shown, and no old fields are merged into the partial snapshot.
-- Both the regular Windows installation and the current Microsoft Store package
-  are detected. Reading the history does not access cookies or credentials,
+- The regular Windows installation, legacy Store cache, and relocated Store
+  history under `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc` are detected.
+  Reading the history does not access cookies or credentials,
   contact a provider endpoint, or change Claude Desktop's settings.
 
 ## Compatibility boundary
