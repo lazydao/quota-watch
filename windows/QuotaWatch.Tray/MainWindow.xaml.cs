@@ -100,8 +100,11 @@ public partial class MainWindow : Window
             y = workArea.Bottom - height - PopupMargin;
         }
 
-        x = Math.Clamp(x, workArea.Left + PopupMargin, workArea.Right - width - PopupMargin);
-        y = Math.Clamp(y, workArea.Top + PopupMargin, workArea.Bottom - height - PopupMargin);
+        // Math.Clamp throws when the popup is larger than the work area.
+        var minX = workArea.Left + PopupMargin;
+        var minY = workArea.Top + PopupMargin;
+        x = Math.Clamp(x, minX, Math.Max(minX, workArea.Right - width - PopupMargin));
+        y = Math.Clamp(y, minY, Math.Max(minY, workArea.Bottom - height - PopupMargin));
         SetWindowPos(handle, new IntPtr(-1), x, y, 0, 0, 0x0001 | 0x0010 | 0x0040);
     }
 

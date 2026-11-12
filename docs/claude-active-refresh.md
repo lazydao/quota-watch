@@ -37,6 +37,13 @@ Claude Code status line, preferring the existing Windows Claude Code login.
   still-future value for the same bucket, window label and duration, including
   when an intervening snapshot omitted that window. A newly supplied reset
   takes precedence. Expired values are not reused or advanced to another cycle.
+- A status-line update never replaces a newer observation of the same window:
+  when both carry reset times, the later reset wins, and for the same reset the
+  higher percentage wins. Idle sessions replaying old limits are thus ignored.
+- While the subscription tier is unknown, the status-line bridge asks the CLI
+  for it at most once per hour, never on every status-line refresh.
+- The reason for a failed active refresh stays visible during the cooldown
+  when no local snapshot is usable.
 - Quota Watch does not refresh, rotate, or write Claude credentials, launch
   login, or install a CLI. The official Claude Code login must be valid for
   unattended active querying. No model call is used for querying or keepalive.

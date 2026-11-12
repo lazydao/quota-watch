@@ -132,6 +132,12 @@ Assert(dashboard.Severity == QuotaSeverity.Normal, "hidden Spark does not trigge
 Assert(dashboard.TrayTooltip.Contains("Codex 10.0%", StringComparison.Ordinal), "tooltip uses visible quota");
 Assert(sparkSnapshot.Providers[0].Buckets.Count == 2, "raw Spark data preserved");
 
+var unavailableSnapshot = QuotaSnapshotParser.Parse("""
+{"schema_version":1,"providers":[{"provider":"claude","status":"unavailable","buckets":[],"message":"offline"}]}
+""");
+dashboard.ApplySnapshot(unavailableSnapshot);
+Assert(dashboard.TrayTooltip.Contains("Claude n/a", StringComparison.Ordinal), "unavailable provider is not shown as zero");
+
 Console.WriteLine("QuotaWatch.Tray smoke tests passed.");
 
 static void Assert(bool condition, string description)

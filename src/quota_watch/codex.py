@@ -58,9 +58,11 @@ def find_codex_executable() -> Path:
     raise CodexError("Codex executable was not found. Install Codex or set QUOTA_WATCH_CODEX_PATH.")
 
 
-def _process_command(executable: Path) -> list[str]:
+def _process_command(executable: Path) -> list[str] | str:
     if os.name == "nt" and executable.suffix.lower() in {".cmd", ".bat"}:
-        return ["cmd.exe", "/d", "/s", "/c", str(executable), "app-server"]
+        # With /s, cmd.exe strips only the outer quotes, so the script path
+        # keeps its own pair and may contain spaces.
+        return f'cmd.exe /d /s /c ""{executable}" app-server"'
     return [str(executable), "app-server"]
 
 
@@ -87,9 +89,13 @@ def _wait_for_id(
     deadline: float,
     process: subprocess.Popen[str],
 ) -> dict[str, Any]:
+    exit_seen = False
     while time.monotonic() < deadline:
         if process.poll() is not None and output.empty():
-            raise CodexError(f"Codex app-server exited with code {process.returncode}.")
+            if exit_seen:
+                raise CodexError(f"Codex app-server exited with code {process.returncode}.")
+            # Give the reader thread one more interval to deliver the last lines.
+            exit_seen = True
         try:
             line = output.get(timeout=min(0.2, max(0.01, deadline - time.monotonic())))
         except queue.Empty:
@@ -98,7 +104,7 @@ def _wait_for_id(
             message = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if message.get("id") != request_id:
+        if not isinstance(message, dict) or message.get("id") != request_id:
             continue
         if "error" in message:
             raise CodexError(f"Codex app-server error: {message['error']}")

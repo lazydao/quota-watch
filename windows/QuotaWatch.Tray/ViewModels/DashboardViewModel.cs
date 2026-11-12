@@ -115,8 +115,8 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
         var summaries = Providers
             .Select(provider =>
             {
-                var providerMax = provider.Buckets.SelectMany(bucket => bucket.Windows).Select(window => window.UsedPercent).DefaultIfEmpty().Max();
-                return $"{provider.Name} {providerMax:0.0}%";
+                var usage = provider.Buckets.SelectMany(bucket => bucket.Windows).Select(window => window.UsedPercent).ToList();
+                return usage.Count == 0 ? $"{provider.Name} n/a" : $"{provider.Name} {usage.Max():0.0}%";
             })
             .ToList();
         TrayTooltip = summaries.Count == 0 ? "Quota Watch — no data" : $"Quota Watch — {string.Join(", ", summaries)}";

@@ -60,10 +60,28 @@ def _json_payload(snapshots: list[ProviderSnapshot]) -> dict[str, object]:
     }
 
 
+def _use_utf8_stdout() -> None:
+    # Claude Code and the tray read UTF-8, whatever the Windows code page is.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
+def _read_stdin_utf8() -> str:
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is None:
+        return sys.stdin.read()
+    return buffer.read().decode("utf-8-sig", errors="replace")
+
+
 def run_once(console: Console, codex_timeout: float, as_json: bool) -> int:
     snapshots = collect_snapshots(codex_timeout)
     if as_json:
-        sys.stdout.write(json.dumps(_json_payload(snapshots), ensure_ascii=False, indent=2) + "\n")
+        # ASCII output stays valid in any console or pipe encoding.
+        sys.stdout.write(json.dumps(_json_payload(snapshots), ensure_ascii=True, indent=2) + "\n")
     else:
         console.print(build_dashboard(snapshots))
     return 0
@@ -101,15 +119,16 @@ def run_watch(console: Console, interval: float, codex_timeout: float) -> int:
 
 
 def run_claude_ingest() -> int:
+    _use_utf8_stdout()
     try:
-        raw = sys.stdin.read()
+        raw = _read_stdin_utf8()
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ClaudeError("Claude status-line input must be a JSON object.")
         try:
             snapshot = ingest_statusline(payload)
         except ClaudeError:
-            cached = read_cached_snapshot()
+            cached = read_cached_snapshot(enrich_plan=False)
             if cached.buckets:
                 print(f"{compact_status(cached)} · cached")
             else:
@@ -117,7 +136,7 @@ def run_claude_ingest() -> int:
             return 0
         print(compact_status(snapshot))
         return 0
-    except (ClaudeError, json.JSONDecodeError) as error:
+    except (ClaudeError, OSError, ValueError) as error:
         print(f"Claude quota unavailable: {error}")
         return 0
 
