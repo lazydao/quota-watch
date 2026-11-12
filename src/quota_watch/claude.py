@@ -29,6 +29,9 @@ _RATE_LIMIT_WINDOWS = (
 )
 
 ACTIVE_REFRESH_INTERVAL_SECONDS = 600
+PLAN_LOOKUP_INTERVAL_SECONDS = 3600
+# Reset timestamps from different sources can differ by rounding.
+_SAME_WINDOW_TOLERANCE_SECONDS = 60
 _USAGE_ENDPOINT = "https://api.anthropic.com/api/oauth/usage"
 
 _WSL_USAGE_HELPER = r"""
@@ -118,6 +121,10 @@ def cache_path() -> Path:
 
 def oauth_refresh_state_path() -> Path:
     return cache_path().with_name("claude-oauth-refresh.json")
+
+
+def _plan_lookup_state_path(destination: Path) -> Path:
+    return destination.with_name("claude-plan-lookup.json")
 
 
 def claude_settings_path() -> Path:
@@ -585,6 +592,35 @@ def _write_snapshot(destination: Path, snapshot: ProviderSnapshot) -> ProviderSn
     return snapshot
 
 
+def _cached_window_is_newer(cached: QuotaWindow, incoming: QuotaWindow) -> bool:
+    """Tell whether a status-line window is older than the unexpired cached one.
+
+    An idle Claude Code session keeps replaying the rate limits of its last
+    response. Usage only grows within one window, so a later reset or a higher
+    percentage for the same reset identifies the newer observation.
+    """
+    if cached.resets_at is None or incoming.resets_at is None:
+        # Without both reset times the two cannot be placed in the same window.
+        return False
+    difference = cached.resets_at - incoming.resets_at
+    if abs(difference) > _SAME_WINDOW_TOLERANCE_SECONDS:
+        return difference > 0
+    return cached.used_percent > incoming.used_percent
+
+
+def _lookup_plan_type(destination: Path) -> str | None:
+    """Ask the CLI for the plan at most once per interval while it is unknown."""
+    state = _plan_lookup_state_path(destination)
+    now = datetime.now(timezone.utc)
+    if not _active_refresh_due(state, PLAN_LOOKUP_INTERVAL_SECONDS, now):
+        return None
+    try:
+        _atomic_json_write(state, {"last_attempt_at": now.isoformat()})
+    except OSError:
+        return None
+    return query_subscription_type()
+
+
 def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) -> ProviderSnapshot:
     rate_limits = payload.get("rate_limits")
     if not isinstance(rate_limits, dict):
@@ -604,19 +640,22 @@ def ingest_statusline(payload: dict[str, Any], destination: Path | None = None) 
     destination = destination or cache_path()
     windows_by_label = {window.label: window for window in incoming_windows}
     for label, window in _cached_unexpired_windows(destination).items():
-        windows_by_label.setdefault(label, window)
+        incoming = windows_by_label.get(label)
+        if incoming is None or _cached_window_is_newer(window, incoming):
+            windows_by_label[label] = window
     windows = [
         windows_by_label[label]
         for _, label, _ in _RATE_LIMIT_WINDOWS
         if label in windows_by_label
     ]
-    plan_type = _cached_plan_type(destination)
+    plan_type = _cached_plan_type(destination) or _lookup_plan_type(destination)
     snapshot = ProviderSnapshot(
         provider="claude",
         status="available",
         buckets=[QuotaBucket(bucket_id="claude", name="All models", windows=windows, plan_type=plan_type)],
     )
-    cached = read_cached_snapshot(destination)
+    # The status line runs every few seconds; never start a subprocess from this read.
+    cached = read_cached_snapshot(destination, enrich_plan=False)
     snapshot.buckets.extend(
         bucket for bucket in cached.buckets
         if bucket.bucket_id.startswith("claude_model_") and bucket.windows
@@ -690,6 +729,22 @@ def _active_refresh_due(path: Path, interval_seconds: int, now: datetime) -> boo
         return age >= interval_seconds
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return True
+
+
+def _last_refresh_error(path: Path) -> str | None:
+    try:
+        error = json.loads(path.read_text(encoding="utf-8")).get("last_error")
+    except (AttributeError, OSError, ValueError):
+        return None
+    return error if isinstance(error, str) and error.strip() else None
+
+
+def _store_snapshot(destination: Path, snapshot: ProviderSnapshot) -> ProviderSnapshot:
+    # A cache that cannot be written must not discard a successful query.
+    try:
+        return _write_snapshot(destination, snapshot)
+    except OSError:
+        return snapshot
 
 
 def _has_quota_windows(snapshot: ProviderSnapshot) -> bool:
@@ -813,7 +868,10 @@ def fetch_claude_snapshot(
     cached = read_cached_snapshot(destination, enrich_plan=False)
     now = datetime.now(timezone.utc)
     if not _active_refresh_due(refresh_state, refresh_interval_seconds, now):
-        return _local_fallback_snapshot(cached, destination)
+        fallback = _local_fallback_snapshot(cached, destination)
+        last_error = None if _has_quota_windows(fallback) else _last_refresh_error(refresh_state)
+        # Keep reporting why the last attempt failed while collection cools down.
+        return unavailable_snapshot("claude", last_error) if last_error else fallback
 
     try:
         _atomic_json_write(refresh_state, {"last_attempt_at": now.isoformat()})
@@ -823,7 +881,7 @@ def fetch_claude_snapshot(
     deadline = time.monotonic() + timeout
     try:
         snapshot = parse_oauth_usage(query_oauth_usage_windows(timeout=timeout))
-        return _write_snapshot(destination, snapshot)
+        return _store_snapshot(destination, snapshot)
     except (ClaudeError, OSError) as windows_error:
         fallback = _local_fallback_snapshot(cached, destination)
         if fallback.status == "available" and _has_quota_windows(fallback):
@@ -833,12 +891,17 @@ def fetch_claude_snapshot(
             if remaining <= 0:
                 raise ClaudeError("Claude query timed out before WSL fallback.")
             snapshot = parse_oauth_usage(query_oauth_usage_wsl(timeout=remaining))
-            return _write_snapshot(destination, snapshot)
+            return _store_snapshot(destination, snapshot)
         except (ClaudeError, OSError) as wsl_error:
             failure = f"Windows: {windows_error} WSL fallback: {wsl_error}"
         if _has_quota_windows(fallback):
             return fallback
-        return unavailable_snapshot("claude", f"Claude active refresh unavailable: {failure}")
+        message = f"Claude active refresh unavailable: {failure}"
+        try:
+            _atomic_json_write(refresh_state, {"last_attempt_at": now.isoformat(), "last_error": message})
+        except OSError:
+            pass
+        return unavailable_snapshot("claude", message)
 
 
 def compact_status(snapshot: ProviderSnapshot) -> str:

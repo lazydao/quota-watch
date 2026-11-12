@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 using QuotaWatch.Tray.Models;
 
 namespace QuotaWatch.Tray.Services;
@@ -23,7 +24,11 @@ public sealed class QuotaCliClient
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
+        // Ask Python for UTF-8 pipes regardless of the Windows code page.
+        startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
         startInfo.ArgumentList.Add("--json");
         startInfo.ArgumentList.Add("--codex-timeout");
         startInfo.ArgumentList.Add("8");

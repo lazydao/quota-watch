@@ -48,7 +48,13 @@ public partial class App : System.Windows.Application
     {
         _controller?.Dispose();
         _showRequestCancellation?.Cancel();
-        _showRequestEvent?.Set();
+        if (_ownsMutex)
+        {
+            // Wake only this instance's listener; a duplicate launch must not
+            // signal the running instance to show its window.
+            _showRequestEvent?.Set();
+        }
+
         try
         {
             _showRequestTask?.Wait(TimeSpan.FromSeconds(1));
