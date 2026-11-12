@@ -6,23 +6,93 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Existing v* tag to publish; leave empty for an artifact-only build"
+      version:
+        description: "Version to release, for example 0.1.9; leave empty for an artifact-only build"
         required: false
         type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # One-click release: set the version on main, then let windows-tray build,
+  # tag and publish it. An existing tag is published as it is.
+  prepare:
+    if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.existing == 'true' && steps.plan.outputs.tag || steps.commit.outputs.sha }}
+      create_tag: ${{ steps.plan.outputs.existing != 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Plan release
+        id: plan
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          version="${VERSION_INPUT#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must look like 1.2.3."
+            exit 1
+          fi
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "Tag $tag already exists; publishing it without changing main."
+            echo "existing=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Run a new release from the main branch."
+            exit 1
+          else
+            echo "existing=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        if: steps.plan.outputs.existing != 'true'
+        with:
+          python-version: "3.13"
+
+      - name: Set version and run tests
+        if: steps.plan.outputs.existing != 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          python scripts/set_version.py "$VERSION"
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m unittest discover -s tests
+
+      - name: Commit version to main
+        id: commit
+        if: steps.plan.outputs.existing != 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --all --message "Release $VERSION"
+            git push origin HEAD:main
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   windows-tray:
+    needs: prepare
+    if: ${{ !cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
     runs-on: windows-latest
     env:
-      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.ref || github.ref }}
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -97,6 +167,18 @@ jobs:
             ${{ steps.package.outputs.checksum_path }}
           if-no-files-found: error
           retention-days: 14
+
+      # The tag is created only after the build and smoke tests passed.
+      - name: Create release tag
+        if: needs.prepare.outputs.create_tag == 'true'
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate $env:RELEASE_TAG --message "Quota Watch $env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to create tag $env:RELEASE_TAG." }
+          git push origin $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { throw "Unable to push tag $env:RELEASE_TAG." }
 
       - name: Create GitHub release
         if: env.RELEASE_TAG != ''
