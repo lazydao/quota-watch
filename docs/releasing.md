@@ -2,18 +2,11 @@
 
 Quota Watch uses matching versions for the Python CLI, Windows tray project, Git tag, and release assets. Do not move or reuse a published version tag; fix release problems in a new patch version.
 
-## 1. Prepare the version
+## 1. Check `main`
 
-Start from an up-to-date, clean `main` branch. Update the same version in:
+Make sure everything for the release is merged and CI is green on `main`. Review the user-facing changes that will be summarized in the GitHub Release.
 
-- `pyproject.toml`
-- `src/quota_watch/__init__.py`
-- `windows/QuotaWatch.Tray/QuotaWatch.Tray.csproj`
-- the stable-version examples in `README.md`
-
-Review the user-facing changes that will be summarized in the GitHub Release.
-
-## 2. Verify locally
+For changes to the tray app, verify on Windows before releasing:
 
 ```powershell
 .venv\Scripts\python -m unittest discover -s tests -v
@@ -24,31 +17,36 @@ dotnet run --project windows\QuotaWatch.Tray.Tests\QuotaWatch.Tray.Tests.csproj 
 
 Confirm that the published EXE opens, refreshes through the installed matching `quota` CLI, and exits cleanly.
 
-## 3. Commit and tag
+## 2. Run the Release workflow
 
-Commit the version change, push `main`, and then create an annotated tag. For example:
+On GitHub, open **Actions → Release → Run workflow**, keep the `main` branch, enter the version (for example `0.1.9`), and run it. The workflow:
+
+1. Sets the version with `scripts/set_version.py` in `pyproject.toml`, `src/quota_watch/__init__.py`, `windows/QuotaWatch.Tray/QuotaWatch.Tray.csproj`, and the install examples in `README.md`.
+2. Runs the Python tests and commits `Release <version>` to `main` when anything changed.
+3. Builds the tray app on a Windows runner and runs the tray smoke tests.
+4. Publishes a self-contained `win-x64` executable and packages it with the README and license.
+5. Creates the annotated tag `v<version>` on that commit, only after the steps above passed.
+6. Publishes the ZIP and SHA-256 checksum to the GitHub Release.
+
+If a step fails before the tag is created, fix the problem on `main` and run the workflow again with the same version. Running it with a version whose tag already exists publishes that tag without changing `main`, which recovers a release that failed after tagging.
+
+The workflow pushes to `main` with the repository's Actions token. If branch protection blocks that push, set the version in a pull request instead (`python scripts/set_version.py 0.1.9`), merge it, and run the workflow: it then finds nothing to commit and continues.
+
+A run with an empty version creates a 14-day Actions artifact and does not tag or publish anything.
+
+## 3. Manual alternative
+
+Pushing an annotated tag still publishes a release. The version files must already match the tag, or the workflow rejects it:
 
 ```powershell
+python scripts\set_version.py 0.1.9
+git commit --all --message "Release 0.1.9"
 git push origin main
-git tag -a v0.1.8 -m "Quota Watch v0.1.8"
-git push origin v0.1.8
+git tag -a v0.1.9 -m "Quota Watch v0.1.9"
+git push origin v0.1.9
 ```
 
-The tag-driven Release workflow rejects versions that do not match both project files.
-
-## 4. Verify GitHub Actions
-
-The workflow:
-
-1. Builds the tray app on a Windows runner.
-2. Runs the tray smoke tests.
-3. Publishes a self-contained `win-x64` executable.
-4. Packages the EXE with the README and license.
-5. Publishes the ZIP and SHA-256 checksum to the GitHub Release.
-
-A manual workflow run without a release tag creates a 14-day Actions artifact and does not publish a GitHub Release.
-
-## 5. Finish the release
+## 4. Finish the release
 
 After the workflow succeeds:
 

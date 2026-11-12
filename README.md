@@ -289,7 +289,7 @@ Protocol references: [Claude Code status line](https://code.claude.com/docs/en/s
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and verification commands. Maintainers can find the tag-driven release checklist in [docs/releasing.md](docs/releasing.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and verification commands. Maintainers can find the release checklist in [docs/releasing.md](docs/releasing.md).
 
 ## License
 
