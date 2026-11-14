@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     public void ShowNearTray()
     {
         _visibilityGeneration++;
+        LimitHeightToWorkArea();
         Show();
         UpdateLayout();
         PositionNearTray();
@@ -45,6 +46,15 @@ public partial class MainWindow : Window
     {
         _visibilityGeneration++;
         Hide();
+    }
+
+    private void LimitHeightToWorkArea()
+    {
+        // Grow with the provider list up to the screen's work area; only a
+        // taller list scrolls.
+        var workArea = Forms.Screen.FromPoint(Forms.Control.MousePosition).WorkingArea;
+        var scale = System.Windows.Media.VisualTreeHelper.GetDpi(this).DpiScaleY;
+        MaxHeight = Math.Max(320, workArea.Height / scale - 2 * PopupMargin);
     }
 
     private async void OnDeactivated(object? sender, EventArgs e)
