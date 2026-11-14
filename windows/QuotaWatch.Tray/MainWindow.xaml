@@ -83,7 +83,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Quota Watch" FontSize="20" FontWeight="SemiBold" />
-                    <TextBlock Text="Claude + Codex" Foreground="#FF969DB5" FontSize="12" Margin="0,2,0,0" />
+                    <TextBlock Text="Claude · Codex · Gemini" Foreground="#FF969DB5" FontSize="12" Margin="0,2,0,0" />
                 </StackPanel>
                 <Button Grid.Column="1"
                         Content="{Binding RefreshText}"
