@@ -1,3 +1,3 @@
-"""Terminal quota monitor for Claude Code and Codex."""
+"""Terminal quota monitor for Claude Code, Codex and Gemini."""
 
 __version__ = "0.1.9"

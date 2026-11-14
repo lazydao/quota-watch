@@ -128,6 +128,7 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
         {
             "claude" => "Claude",
             "codex" => "Codex",
+            "gemini" => "Gemini",
             _ => string.IsNullOrWhiteSpace(provider) ? "Provider" : provider,
         };
     }
@@ -175,6 +176,8 @@ public sealed class ProviderViewModel
             {
                 "claude" => "Claude",
                 "codex" => "Codex",
+                "gemini" => "Gemini",
+            "gemini" => "Gemini",
                 _ => provider.Provider,
             },
             StatusLabel = status switch

@@ -132,6 +132,17 @@ Assert(dashboard.Severity == QuotaSeverity.Normal, "hidden Spark does not trigge
 Assert(dashboard.TrayTooltip.Contains("Codex 10.0%", StringComparison.Ordinal), "tooltip uses visible quota");
 Assert(sparkSnapshot.Providers[0].Buckets.Count == 2, "raw Spark data preserved");
 
+var geminiSnapshot = QuotaSnapshotParser.Parse("""
+{"schema_version":1,"providers":[{"provider":"gemini","status":"available","buckets":[
+{"bucket_id":"gemini_gemini","name":"Gemini","plan_type":"Pro","windows":[
+{"label":"5h","used_percent":37,"window_minutes":300},{"label":"7d","used_percent":10,"window_minutes":10080}]},
+{"bucket_id":"gemini_3p","name":"Claude + GPT","plan_type":"Pro","windows":[{"label":"7d","used_percent":20}]}]}]}
+""");
+dashboard.ApplySnapshot(geminiSnapshot);
+Assert(dashboard.Providers[0].Name == "Gemini", "Gemini provider display name");
+Assert(dashboard.Providers[0].Buckets.Count == 2, "Gemini model groups shown");
+Assert(dashboard.TrayTooltip.Contains("Gemini 37.0%", StringComparison.Ordinal), "Gemini tray tooltip");
+
 var unavailableSnapshot = QuotaSnapshotParser.Parse("""
 {"schema_version":1,"providers":[{"provider":"claude","status":"unavailable","buckets":[],"message":"offline"}]}
 """);

@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/lazydao/quota-watch?display_name=tag&sort=semver)](https://github.com/lazydao/quota-watch/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Windows notification-area and terminal quota monitor for Claude Code and Codex. Quota Watch reads the sessions already authenticated by the official local CLIs and does not store provider credentials.
+Windows notification-area and terminal quota monitor for Claude Code, Codex and Gemini (Antigravity CLI). Quota Watch reads the sessions already authenticated by the official local CLIs and does not store provider credentials.
 
 <p align="center">
   <img src="docs/images/quota-watch-tray.png" alt="Quota Watch Windows notification-area dashboard" width="440">
@@ -20,6 +20,7 @@ Windows notification-area and terminal quota monitor for Claude Code and Codex. 
 - Multi-bucket Codex quota support through `rateLimitsByLimitId`
 - Windows-first Claude quota queries every 10 minutes, with local status-line/Desktop history and WSL fallback
 - Codex App backend discovery and active, read-only quota queries without a model call
+- Gemini and Claude + GPT quota groups from the Antigravity CLI (`agy`) status line, on Windows or in WSL
 - Claude and Codex subscription-plan labels when their official CLIs expose them
 - No browser cookies, OAuth tokens, API keys, or session keys in the cache
 
@@ -29,7 +30,7 @@ Quota Watch has two components:
 
 | Component | Installed from | Responsibility |
 | --- | --- | --- |
-| `quota` CLI | Python package installed with pipx | Reads Claude and Codex quota data and renders terminal or JSON output |
+| `quota` CLI | Python package installed with pipx | Reads Claude, Codex and Gemini quota data and renders terminal or JSON output |
 | Windows tray app | Self-contained EXE from GitHub Releases | Displays the flyout and calls the installed `quota --json` command |
 
 The tray EXE is self-contained for .NET, but it still requires the `quota` command. Keeping provider access in the CLI lets the terminal dashboard and tray app share the same adapters, WSL bridge, cache, and authentication.
@@ -195,6 +196,28 @@ The setup creates a small wrapper under the WSL user's `~/.claude` directory. If
 
 Quota data can come from a selected non-default distribution, but the Claude subscription label currently falls back to the local Windows installation or the default WSL distribution.
 
+## Gemini (Antigravity CLI)
+
+Google's Antigravity CLI (`agy`) pipes its session state, including the remaining quota of each model group, to a [status-line command](https://antigravity.google/docs/cli/statusline/). Quota Watch connects to that documented interface. The Gemini section appears in the dashboard and tray once the bridge has delivered its first update.
+
+For `agy` running in the default WSL distribution, run this on Windows:
+
+```powershell
+quota setup-gemini --wsl
+```
+
+Select another distribution with `--distro`, and preview the change with `--dry-run`. For `agy` installed on the same system as the `quota` command, run `quota setup-gemini`. Then start `agy` and send one request.
+
+The WSL setup writes a small wrapper next to `~/.gemini/antigravity-cli/settings.json` and backs up the original settings once. An existing custom status line keeps its output and the wrapper forwards the payload in the background. Without one, agy's built-in line stays visible through `stack_with_default` and a compact quota line is added below it. The wrapper starts the Windows CLI at most once every 30 seconds. On the same system, an existing custom status line is left unchanged and the command to chain is printed instead.
+
+Buckets are grouped by their key: `gemini-5h` and `gemini-weekly` become the 5-hour and 7-day windows of **Gemini**, and `3p-*` buckets become **Claude + GPT**. Unknown bucket names are displayed as they are reported. Used percentages are derived from `remaining_fraction`.
+
+Limits of this source:
+
+- `agy` reports quota only while it is running, so nothing updates when it is closed. Usage from the Antigravity desktop app or another device shows up at the next `agy` update.
+- A snapshot older than 15 minutes carries a note with its age and is marked `Stale` after 24 hours. Windows whose reset time has passed are dropped: a new cycle is never guessed.
+- Only quota percentages, reset times and the plan tier are cached. The account email in the payload is not stored. No Google credential is read and no network request is made.
+
 ## Codex
 
 No additional setup is needed. Quota Watch locates the official local Codex executable, launches `codex app-server`, and calls `account/rateLimits/read` over JSONL stdio. The adapter displays every quota bucket returned by the installed Codex version.
@@ -267,7 +290,7 @@ Check the Windows notification-area overflow first. Quota Watch intentionally do
 
 3. Delete the extracted tray directory and any shortcut you created.
 
-Quota Watch intentionally leaves provider-owned Claude and Codex authentication untouched.
+Quota Watch intentionally leaves provider-owned Claude, Codex and Google authentication untouched.
 
 ## Data flow and privacy
 
@@ -277,7 +300,8 @@ Claude status line -------- fallback snapshot --------------|
 Claude Desktop history ---- partial local fallback ---------|
 WSL Claude OAuth ---------- last active fallback ------------|
                                                              +--> quota CLI --> terminal / JSON --> tray app
-Windows Codex App / CLI --- read-only app-server JSON-RPC ---+
+Windows Codex App / CLI --- read-only app-server JSON-RPC ---|
+Antigravity CLI (agy) ----- status-line quota snapshot ------+
 ```
 
 Claude data can be marked stale when its available sources have stopped producing fresh snapshots. Cached windows with known reset timestamps are hidden after their reset passes; desktop history does not contain reset timestamps and is identified as a partial fallback. Codex App Server is currently an experimental interface, so Quota Watch keeps that protocol behind an isolated adapter.
@@ -285,7 +309,7 @@ Claude data can be marked stale when its available sources have stopped producin
 See [SECURITY.md](SECURITY.md) for the stored-data boundary and private vulnerability-reporting instructions.
 See [Windows-first collection](docs/windows-first-collection.md) for source priority, token-cost boundaries, and verification criteria.
 
-Protocol references: [Claude Code status line](https://code.claude.com/docs/en/statusline), [Codex App Server](https://developers.openai.com/codex/app-server/), and [Codex CLI installation](https://github.com/openai/codex#installing-and-running-codex-cli).
+Protocol references: [Claude Code status line](https://code.claude.com/docs/en/statusline), [Codex App Server](https://developers.openai.com/codex/app-server/), [Antigravity CLI status line](https://antigravity.google/docs/cli/statusline/), and [Codex CLI installation](https://github.com/openai/codex#installing-and-running-codex-cli).
 
 ## Development
 

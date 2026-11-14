@@ -19,13 +19,20 @@ from .claude import (
     read_cached_snapshot,
 )
 from .codex import fetch_codex_snapshot
+from .gemini import (
+    GeminiError,
+    compact_status as gemini_compact_status,
+    configure_statusline as configure_gemini_statusline,
+    fetch_gemini_snapshot,
+    ingest_statusline as ingest_gemini_statusline,
+)
 from .models import ProviderSnapshot, utc_now_iso
 from .render import build_dashboard
-from .wsl import configure_wsl_statusline
+from .wsl import configure_wsl_gemini_statusline, configure_wsl_statusline
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Monitor Claude Code and Codex quotas in the terminal.")
+    parser = argparse.ArgumentParser(description="Monitor Claude Code, Codex and Gemini quotas in the terminal.")
     parser.add_argument("--version", action="version", version=f"quota-watch {__version__}")
     parser.add_argument("--json", action="store_true", help="Print one machine-readable JSON snapshot.")
     parser.add_argument("--codex-timeout", type=float, default=8.0, help="Codex query timeout in seconds.")
@@ -45,11 +52,25 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--dry-run", action="store_true", help="Show what would be configured without writing.")
     setup.add_argument("--wsl", action="store_true", help="Connect Claude Code in the default WSL distribution.")
     setup.add_argument("--distro", help="WSL distribution name; requires --wsl.")
+
+    commands.add_parser("gemini-ingest", help=argparse.SUPPRESS)
+    setup_gemini = commands.add_parser(
+        "setup-gemini",
+        help="Connect Gemini quotas through the Antigravity CLI (agy) status line.",
+    )
+    setup_gemini.add_argument("--dry-run", action="store_true", help="Show what would be configured without writing.")
+    setup_gemini.add_argument("--wsl", action="store_true", help="Connect agy in the default WSL distribution.")
+    setup_gemini.add_argument("--distro", help="WSL distribution name; requires --wsl.")
     return parser
 
 
 def collect_snapshots(codex_timeout: float) -> list[ProviderSnapshot]:
-    return [fetch_claude_snapshot(), fetch_codex_snapshot(timeout=codex_timeout)]
+    snapshots = [fetch_claude_snapshot(), fetch_codex_snapshot(timeout=codex_timeout)]
+    # Gemini appears only once its agy bridge has delivered data.
+    gemini = fetch_gemini_snapshot()
+    if gemini is not None:
+        snapshots.append(gemini)
+    return snapshots
 
 
 def _json_payload(snapshots: list[ProviderSnapshot]) -> dict[str, object]:
@@ -141,6 +162,43 @@ def run_claude_ingest() -> int:
         return 0
 
 
+def run_gemini_ingest() -> int:
+    _use_utf8_stdout()
+    try:
+        payload = json.loads(_read_stdin_utf8())
+        if not isinstance(payload, dict):
+            raise GeminiError("Antigravity status-line input must be a JSON object.")
+        print(gemini_compact_status(ingest_gemini_statusline(payload)))
+    except GeminiError:
+        # agy may not know its quota yet; keep its status line quiet.
+        pass
+    except (OSError, ValueError) as error:
+        print(f"Gemini quota unavailable: {error}")
+    return 0
+
+
+def run_setup_gemini(
+    console: Console,
+    dry_run: bool,
+    use_wsl: bool = False,
+    distro: str | None = None,
+) -> int:
+    try:
+        if use_wsl:
+            _, message, _ = configure_wsl_gemini_statusline(dry_run=dry_run, distro=distro)
+            console.print(message)
+            return 0
+        changed, message, entry = configure_gemini_statusline(dry_run=dry_run)
+    except (ClaudeError, GeminiError, OSError) as error:
+        console.print(f"[red]{error}[/red]")
+        return 1
+    console.print(message)
+    if not changed and "already" not in message:
+        console.print("Chain this command into the existing statusLine configuration:")
+        console.print(entry["command"], markup=False)
+    return 0
+
+
 def run_setup_claude(
     console: Console,
     dry_run: bool,
@@ -179,4 +237,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.distro and not args.wsl:
             parser.error("--distro requires --wsl.")
         return run_setup_claude(console, args.dry_run, args.wsl, args.distro)
+    if args.command == "gemini-ingest":
+        return run_gemini_ingest()
+    if args.command == "setup-gemini":
+        if args.distro and not args.wsl:
+            parser.error("--distro requires --wsl.")
+        return run_setup_gemini(console, args.dry_run, args.wsl, args.distro)
     return run_once(console, args.codex_timeout, args.json)
