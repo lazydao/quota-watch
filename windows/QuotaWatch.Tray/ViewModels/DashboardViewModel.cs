@@ -177,7 +177,6 @@ public sealed class ProviderViewModel
                 "claude" => "Claude",
                 "codex" => "Codex",
                 "gemini" => "Gemini",
-            "gemini" => "Gemini",
                 _ => provider.Provider,
             },
             StatusLabel = status switch
